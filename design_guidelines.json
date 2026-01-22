@@ -1,0 +1,172 @@
+{
+  "identity": {
+    "persona": "E1",
+    "mission": "Create a top 1% dashboard design that blends 'Control Room' density with 'Electric & Neon' vibrancy.",
+    "principles": [
+      "Fusion over Imitation: Mix professional data density with gaming-tier aesthetics.",
+      "Emotion First: Data should feel alive, not static.",
+      "Content is King: Every pixel must serve the data.",
+      "Zoom In: Use bold focus on essential metrics.",
+      "Negative Space: Use it to group data logically, not just for decoration.",
+      "Contrast: High contrast for readability in dark mode."
+    ]
+  },
+  "typography": {
+    "fonts": {
+      "headings": {
+        "family": "Manrope, sans-serif",
+        "weights": ["600", "700", "800"],
+        "usage": "All headers (h1-h6), big metrics, and modal titles."
+      },
+      "body": {
+        "family": "IBM Plex Sans, sans-serif",
+        "weights": ["400", "500"],
+        "usage": "General text, table data, form labels."
+      },
+      "mono": {
+        "family": "JetBrains Mono, monospace",
+        "weights": ["400"],
+        "usage": "Code snippets, API keys, specific data values."
+      }
+    },
+    "rules": [
+      "Headings > 32px must use tracking-tight.",
+      "Overlines/Labels must be Uppercase + tracking-widest + text-xs.",
+      "Line height: leading-none for headers, leading-relaxed for body."
+    ]
+  },
+  "colors": {
+    "theme": "Electric & Neon (Professional Variant)",
+    "palette": {
+      "background": {
+        "default": "#0B0C15",
+        "paper": "#13141F",
+        "subtle": "#1C1E2D"
+      },
+      "foreground": {
+        "default": "#E2E8F0",
+        "muted": "#94A3B8",
+        "inverse": "#0F172A"
+      },
+      "primary": {
+        "default": "#6366F1",
+        "hover": "#4F46E5",
+        "foreground": "#FFFFFF"
+      },
+      "secondary": {
+        "default": "#1E293B",
+        "foreground": "#F8FAFC"
+      },
+      "accent": {
+        "cyan": "#06B6D4",
+        "purple": "#8B5CF6",
+        "green": "#10B981",
+        "pink": "#EC4899",
+        "orange": "#F97316"
+      },
+      "border": {
+        "default": "#2D3042",
+        "active": "#4F46E5"
+      },
+      "charts": [
+        "#6366F1",
+        "#06B6D4",
+        "#10B981",
+        "#F97316",
+        "#EC4899"
+      ]
+    },
+    "gradients": {
+      "primary": "linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)",
+      "glow": "radial-gradient(circle at center, rgba(99, 102, 241, 0.15) 0%, rgba(0, 0, 0, 0) 70%)"
+    }
+  },
+  "layout": {
+    "grid_system": "The 'Control Room' Grid (Mode B)",
+    "rules": [
+      "Base Grid: grid-cols-1 md:grid-cols-3 lg:grid-cols-4",
+      "Gap Strategy: Tight (gap-4 or gap-6)",
+      "Span Logic: Summary (col-span-1), Primary Data (col-span-2 row-span-2), Feed (col-span-1 row-span-2)",
+      "Every pixel utilized. Use h-full on children."
+    ],
+    "spacing": {
+      "scale": ["p-1", "p-2", "p-4", "p-6", "p-8", "p-12", "p-16", "p-24"],
+      "philosophy": "Generous internal padding (p-6) for containers to prevent text collision."
+    }
+  },
+  "components": {
+    "cards": {
+      "style": "Grid Borders (The 'Technical' Look)",
+      "implementation": "bg-card border border-border/40 shadow-none hover:border-primary/50 transition-colors duration-300"
+    },
+    "buttons": {
+      "style": "Sharp or slightly rounded (rounded-md)",
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_15px_rgba(99,102,241,0.3)]",
+      "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+    },
+    "inputs": {
+      "style": "bg-background border-input focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all"
+    },
+    "tables": {
+      "style": "Compact, dense. Header: text-xs uppercase tracking-wider text-muted-foreground. Rows: hover:bg-muted/50 transition-colors."
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": {
+      "usage": "Sticky Headers, Floating Navs, Toasts",
+      "classes": "bg-background/70 backdrop-blur-xl border-b border-white/10"
+    },
+    "textures": {
+      "usage": "Subtle noise overlay on the main background to kill digital flatness.",
+      "css": "background-image: url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E\");"
+    }
+  },
+  "assets": {
+    "images": {
+      "products": [
+        {
+          "url": "https://images.unsplash.com/photo-1759975652551-cf4cdcf52973?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjB0ZWNoJTIwZ2FkZ2V0cyUyMHByb2R1Y3RzfGVufDB8fHx8MTc2NjM0MjUyNnww&ixlib=rb-4.1.0&q=85",
+          "category": "tech",
+          "description": "iPhone 17 Pro Silver"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1760587162690-95608c8ab2da?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjB0ZWNoJTIwZ2FkZ2V0cyUyMHByb2R1Y3RzfGVufDB8fHx8MTc2NjM0MjUyNnww&ixlib=rb-4.1.0&q=85",
+          "description": "Apple devices setup"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1760520338238-4137dd2dc28f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHw0fHxtb2Rlcm4lMjB0ZWNoJTIwZ2FkZ2V0cyUyMHByb2R1Y3RzfGVufDB8fHx8MTc2NjM0MjUyNnww&ixlib=rb-4.1.0&q=85",
+          "description": "Apple Watch and iPhone flat lay"
+        }
+      ],
+      "avatars": [
+        {
+          "url": "https://images.unsplash.com/photo-1615843423179-bea071facf96?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjB1c2VyJTIwYXZhdGFyJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzY2MjcxNjAwfDA&ixlib=rb-4.1.0&q=85",
+          "category": "user",
+          "description": "Person in black shirt"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1650913406617-bd9b0ab07d07?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjB1c2VyJTIwYXZhdGFyJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzY2MjcxNjAwfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Man holding cup"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1648293821367-b39c09679658?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjB1c2VyJTIwYXZhdGFyJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzY2MjcxNjAwfDA&ixlib=rb-4.1.0&q=85",
+          "description": "Man with beard green shirt"
+        }
+      ]
+    },
+    "icons": {
+      "library": "lucide-react",
+      "style": "Stroke width 1.5px or 2px. Consistent sizing (w-4 h-4 for small, w-5 h-5 for medium)."
+    }
+  },
+  "universal_guidelines": [
+    "Do not use 'Inter' for headings. Use 'Manrope'.",
+    "Do not use pure black (#000000). Use tinted darks (#0B0C15).",
+    "Always add micro-interactions (hover, focus, active).",
+    "Use 'sonner' for toasts.",
+    "All interactive elements must have data-testid.",
+    "Do not use generic centered layouts. Use the 'Control Room' grid.",
+    "Ensure high contrast for accessibility."
+  ],
+  "instructions_to_main_agent": "1. Install necessary fonts (Manrope, IBM Plex Sans). 2. Update tailwind.config.js with the new color palette. 3. Create a global layout wrapper that applies the background and font settings. 4. Build the dashboard using the 'Control Room' grid strategy. 5. Use the provided image URLs for mock data."
+}

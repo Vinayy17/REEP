@@ -1,0 +1,6 @@
+rm -rf build dist
+npm run build
+sudo rm -rf /var/www/rridegarage.com/*
+sudo cp -r build/* /var/www/rridegarage.com/
+sudo nginx -t
+sudo systemctl reload nginx
