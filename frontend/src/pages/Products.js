@@ -13,9 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner"
 import { Plus, Edit, Trash2, Search, QrCode, Camera, X, ImageIcon } from "lucide-react"
 import imageCompression from "browser-image-compression"
+import { useNavigate } from "react-router-dom"
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`
-
 export const compressImage = async (file) => {
   const options = {
     maxSizeMB: 0.25,              // ⬅️ even safer (250 KB)
@@ -36,7 +36,10 @@ export const compressImage = async (file) => {
 }
 
 
+
 const Products = () => {
+  const navigate = useNavigate()
+
   const [isMobile, setIsMobile] = useState(false)
 
   useEffect(() => {
@@ -81,6 +84,10 @@ const Products = () => {
     sku: "",
     images: [],
   })
+  const goToInventory = (sku, mode) => {
+  navigate(`/inventory?sku=${encodeURIComponent(sku)}&mode=${mode}`)
+}
+
 
   const servicesCategory = categories.find((c) => c.name.toLowerCase() === "services")
   const isServiceSelected = !!servicesCategory && formData.category_id === servicesCategory.id
@@ -259,13 +266,13 @@ const Products = () => {
         ? []
         : variants
           .filter((v) => v.v_sku && v.v_sku.trim() !== "")
-.map((v) => ({
-  v_sku: v.v_sku,
-  variant_name: v.variant_name,
-  color: v.color,
-  size: v.size,
-  image_url: v.image_url,
-}))
+          .map((v) => ({
+            v_sku: v.v_sku,
+            variant_name: v.variant_name,
+            color: v.color,
+            size: v.size,
+            image_url: v.image_url,
+          }))
 
     const payload = {
       ...formData,
@@ -406,8 +413,8 @@ const Products = () => {
               {/* ⬇️ KEEP EVERYTHING BELOW EXACTLY SAME */}
               <DialogContent
                 className={`${isMobile
-                    ? "w-full h-[100dvh] max-w-none m-0 rounded-none flex flex-col p-0 overflow-hidden"
-                    : "max-w-2xl max-h-[90vh] overflow-y-auto"
+                  ? "w-full h-[100dvh] max-w-none m-0 rounded-none flex flex-col p-0 overflow-hidden"
+                  : "max-w-2xl max-h-[90vh] overflow-y-auto"
                   }`}
               >
                 <DialogHeader
@@ -508,30 +515,29 @@ const Products = () => {
                           {formData.images.length}/5
                         </span>
                       </div>
-{/* READ-ONLY CURRENT STOCK (EDIT MODE ONLY) */}
-{editingProduct && !isServiceSelected && (
-  <div className="flex items-center gap-2 px-1">
-    <span className="text-xs uppercase tracking-wider font-bold text-muted-foreground">
-      Current Stock
-    </span>
+                      {/* READ-ONLY CURRENT STOCK (EDIT MODE ONLY) */}
+                      {editingProduct && !isServiceSelected && (
+                        <div className="flex items-center gap-2 px-1">
+                          <span className="text-xs uppercase tracking-wider font-bold text-muted-foreground">
+                            Current Stock
+                          </span>
 
-    <span
-      className={`text-xs font-black px-2 py-1 rounded-full ${
-        editingProduct.stock <= editingProduct.min_stock
-          ? "bg-destructive/10 text-destructive"
-          : "bg-green-500/10 text-green-500"
-      }`}
-    >
-      {editingProduct.stock}
-    </span>
+                          <span
+                            className={`text-xs font-black px-2 py-1 rounded-full ${editingProduct.stock <= editingProduct.min_stock
+                                ? "bg-destructive/10 text-destructive"
+                                : "bg-green-500/10 text-green-500"
+                              }`}
+                          >
+                            {editingProduct.stock}
+                          </span>
 
-    {editingProduct.variants?.length > 0 && (
-      <span className="text-[10px] font-bold text-muted-foreground">
-        ({editingProduct.variants.length} variants)
-      </span>
-    )}
-  </div>
-)}
+                          {editingProduct.variants?.length > 0 && (
+                            <span className="text-[10px] font-bold text-muted-foreground">
+                              ({editingProduct.variants.length} variants)
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       <div className="grid grid-cols-2 gap-3">
                         <Label className="flex flex-col items-center justify-center h-28 rounded-2xl border-2 border-dashed border-muted hover:border-primary/50 transition-all bg-muted/10 cursor-pointer active:scale-95">
@@ -622,7 +628,7 @@ const Products = () => {
                       </div>
                       {!isServiceSelected && (
                         <>
-                          
+
                           <div className="space-y-2">
                             <Label className="text-xs uppercase tracking-wider text-muted-foreground font-bold">
                               Low Stock Alert
@@ -936,7 +942,23 @@ const Products = () => {
                 >
                   <Edit className="w-3.5 h-3.5 mr-2" /> Edit
                 </Button>
+                          <Button
+  variant="outline"
+  size="sm"
+  className="h-10 rounded-xl text-xs font-bold"
+  onClick={() => goToInventory(p.sku, "in")}
+>
+  IN
+</Button>
 
+<Button
+  variant="outline"
+  size="sm"
+  className="h-10 rounded-xl text-xs font-bold"
+  onClick={() => goToInventory(p.sku, "out")}
+>
+  OUT
+</Button>
                 {p.variants?.length > 0 && (
                   <Button
                     variant="ghost"
@@ -1126,6 +1148,23 @@ const Products = () => {
                     {role === "admin" && (
                       <td className="p-4">
                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title="Stock In"
+                            onClick={() => goToInventory(p.sku, "in")}
+                          >
+                            ⬆️
+                          </Button>
+
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title="Stock Out"
+                            onClick={() => goToInventory(p.sku, "out")}
+                          >
+                            ⬇️
+                          </Button>
                           <Button
                             size="icon"
                             variant="ghost"

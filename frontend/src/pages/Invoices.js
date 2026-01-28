@@ -47,6 +47,8 @@ export default function Invoice() {
   const [showProductSearch, setShowProductSearch] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState(null)
   const [showVariantDialog, setShowVariantDialog] = useState(false)
+  const [gstEnabled, setGstEnabled] = useState(true)
+const [gstRate, setGstRate] = useState(18)
 
   // Customer fields
   const [customerPhone, setCustomerPhone] = useState("")
@@ -523,19 +525,24 @@ export default function Invoice() {
   }
 
   const calculateTotals = () => {
-    const itemsSubtotal = lineItems.reduce((sum, item) => sum + item.total, 0)
+  const itemsSubtotal = lineItems.reduce((sum, item) => sum + item.total, 0)
+  const extraAmount = Number(manualAmount || 0)
 
-    const gstAmount = lineItems.reduce((sum, item) => {
-      return sum + (item.total * item.gst_rate) / 100
-    }, 0)
+  const taxableAmount = itemsSubtotal + extraAmount
 
-    const extraAmount = Number(manualAmount || 0)
+  const gstAmount = gstEnabled
+    ? (taxableAmount * Number(gstRate || 0)) / 100
+    : 0
 
-    const subtotal = itemsSubtotal + extraAmount
-    const total = subtotal + gstAmount - discount
+  const total = taxableAmount + gstAmount - Number(discount || 0)
 
-    return { subtotal, gstAmount, total }
+  return {
+    subtotal: taxableAmount,
+    gstAmount,
+    total,
   }
+}
+
 
   const resetForm = () => {
     setCustomerPhone("")
@@ -560,6 +567,9 @@ export default function Invoice() {
     setProductSearchResults([])
     setIsSearchingProducts(false)
     setSelectedProductForVariant(null)
+    setGstEnabled(true)
+setGstRate(18)
+
   }
   const handleCreateInvoice = async () => {
     if (!customerName || !customerPhone || lineItems.length === 0) {
@@ -575,45 +585,38 @@ export default function Invoice() {
         return
       }
     }
-
     const { gstAmount } = calculateTotals()
 
     try {
       const payload = {
-        customer_id: customerId,
-        customer_name: customerName,
-        customer_phone: customerPhone,
-        customer_email: customerEmail,
-        customer_address: customerAddress,
+  customer_id: customerId,
+  customer_name: customerName,
+  customer_phone: customerPhone,
+  customer_email: customerEmail,
+  customer_address: customerAddress,
 
-        items: lineItems.map((item) => ({
-          product_id: String(item.product_id),
-          product_name: item.product_name,
-          quantity: Number(item.quantity),
-          price: Number(item.price),
-          gst_rate: Number(item.gst_rate || 18),
-          total: Number(item.total),
-          sku: item.v_sku || item.sku,
-          v_sku: item.v_sku,
-          variant_name: item.variant_name,
-          color: item.color,
-          size: item.size,
-          // Ensure variant_info is passed correctly if it exists
-          variant_info: item.variant_info
-            ? {
-              v_sku: item.variant_info.v_sku,
-              variant_name: item.variant_info.variant_name,
-              color: item.variant_info.color,
-              size: item.variant_info.size,
-              v_selling_price: item.variant_info.v_selling_price,
-            }
-            : null,
-        })),
+  items: lineItems.map((item) => ({
+    product_id: String(item.product_id),
+    product_name: item.product_name,
+    quantity: Number(item.quantity),
+    price: Number(item.price),
+    gst_rate: gstEnabled ? Number(gstRate) : 0,
+    total: Number(item.total),
+    sku: item.v_sku || item.sku,
+    v_sku: item.v_sku,
+    variant_name: item.variant_name,
+    color: item.color,
+    size: item.size,
+    variant_info: item.variant_info || null,
+  })),
 
-        gst_amount: gstAmount,
-        discount: Number(discount),
-        payment_status: paymentStatus,
-      }
+  gst_enabled: gstEnabled,
+  gst_rate: gstEnabled ? Number(gstRate) : 0,
+  gst_amount: gstAmount,
+  discount: Number(discount),
+  payment_status: paymentStatus,
+}
+
 
       await axios.post(`${API}/invoices`, payload)
 
@@ -698,12 +701,13 @@ export default function Invoice() {
       <body>
         <div class="invoice-container">
           <div class="header">
-            <div class="company-name">R RIDE GARAGE</div>
-            <div class="company-tagline">Your Trusted Auto Care Partner</div>
+            <div class="company-name">R RIDE</div>
+<div class="company-tagline" style="font-weight: bold;">BIKE GARAGE & STUDIO</div>
+
             <div class="company-details">
-              <p>123 Main Street, Cityname, State - 123456</p>
-              <p>Phone: +91 98765 43210 | Email: contact@rridegarage.com</p>
-              <p>GSTIN: 29ABCDE1234F1Z5</p>
+              <p>Mahaveer Building, gala no 09, near payal talkies, mandai road,
+ Dhamankar naka, Bhiwandi, 421305 </p>
+              <p>Phone: +91 90822 582580 | Email: outransystems@gmail.com</p>
             </div>
           </div>
 
@@ -733,7 +737,9 @@ export default function Invoice() {
                 <th>Product</th>
                 <th class="text-right">Qty</th>
                 <th class="text-right">Price</th>
-                <th class="text-right">GST %</th>
+<th class="text-right">
+  ${invoice.gst_enabled ? `GST ${invoice.gst_rate}%` : "GST"}
+</th>
                 <th class="text-right">Amount</th>
               </tr>
             </thead>
@@ -762,8 +768,12 @@ export default function Invoice() {
                 <td class="text-right">₹${formatCurrency(subtotal)}</td>
               </tr>
               <tr>
-                <td>GST Amount:</td>
-                <td class="text-right">₹${formatCurrency(gstAmount)}</td>
+${gstAmount > 0 ? `
+<tr>
+  <td>GST Amount:</td>
+  <td class="text-right">₹${formatCurrency(gstAmount)}</td>
+</tr>
+` : ""}
               </tr>
               <tr>
                 <td>Discount:</td>
@@ -1394,6 +1404,35 @@ export default function Invoice() {
                     </Select>
                   </div>
                 </div>
+<div className="flex items-center justify-between gap-3">
+  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+    Apply GST
+  </Label>
+
+  <input
+    type="checkbox"
+    checked={gstEnabled}
+    onChange={(e) => setGstEnabled(e.target.checked)}
+    className="w-5 h-5 accent-primary cursor-pointer"
+  />
+</div>
+
+{gstEnabled && (
+  <div>
+    <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+      GST Percentage (%)
+    </Label>
+    <Input
+      type="number"
+      min="0"
+      max="28"
+      step="0.1"
+      value={gstRate}
+      onChange={(e) => setGstRate(Number(e.target.value))}
+      className="h-11 rounded-xl"
+    />
+  </div>
+)}
 
                 <div className="border-t pt-4 space-y-2 text-sm">
                   <div className="flex justify-between text-muted-foreground">
@@ -1537,7 +1576,12 @@ export default function Invoice() {
                           <td className="p-3 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
                           <td className="p-3 font-medium">{inv.customer_name}</td>
                           <td className="p-3 text-sm">{inv.customer_phone || "N/A"}</td>
-                          <td className="p-3 text-right font-semibold">₹{formatCurrency(inv.total)}</td>
+                          <td className="p-3 text-right font-semibold">₹{formatCurrency(
+  inv.items.reduce((s, i) => s + i.total, 0) +
+  inv.gst_amount -
+  inv.discount
+)}
+</td>
                           <td className="p-3">
                             <Select
                               value={inv.payment_status || "pending"}
@@ -1618,7 +1662,12 @@ export default function Invoice() {
                             </p>
                           </div>
                           <div className="text-right shrink-0">
-                            <p className="text-lg font-bold">₹{formatCurrency(inv.total)}</p>
+                            <p className="text-lg font-bold">₹{formatCurrency(
+  inv.items.reduce((s, i) => s + i.total, 0) +
+  inv.gst_amount -
+  inv.discount
+)}
+</p>
                           </div>
                         </div>
 

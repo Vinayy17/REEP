@@ -25,6 +25,7 @@ import {
   History,
   Search,
 } from "lucide-react"
+import { useSearchParams } from "react-router-dom"
 
 const API =
   `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
@@ -47,43 +48,43 @@ export default function Inventory() {
   const [page, setPage] = useState(1)
   const limit = 30
   const [total, setTotal] = useState(0)
+const [searchParams] = useSearchParams()
 
   // ================= LOOKUP =================
-  const lookupSku = async () => {
-    if (!skuInput.trim()) {
-      toast.error("Enter SKU")
-      return
-    }
+ const lookupSku = async (skuOverride) => {
+  const sku = (skuOverride ?? skuInput).trim()
 
-    try {
-      setLoading(true)
-      const res = await axios.get(
-        `${API}/inventory/lookup/${skuInput.trim()}`
-      )
-
-      setLookupData(res.data)
-
-      const map = {}
-
-      // 🔥 VARIANTS EXIST
-      if (res.data.variants?.length > 0) {
-        res.data.variants.forEach(v => {
-          map[v.v_sku] = ""
-        })
-      }
-      // 🔥 NO VARIANTS → PRODUCT LEVEL
-      else {
-        map[res.data.parent_sku] = ""
-      }
-
-      setQtyInputs(map)
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "SKU not found")
-      setLookupData(null)
-    } finally {
-      setLoading(false)
-    }
+  if (!sku) {
+    toast.error("Enter SKU")
+    return
   }
+
+  try {
+    setLoading(true)
+
+    const res = await axios.get(`${API}/inventory/lookup/${sku}`)
+
+    setLookupData(res.data)
+
+    const map = {}
+
+    if (res.data.variants?.length > 0) {
+      res.data.variants.forEach(v => {
+        map[v.v_sku] = ""
+      })
+    } else {
+      map[res.data.parent_sku] = ""
+    }
+
+    setQtyInputs(map)
+  } catch (e) {
+    toast.error(e.response?.data?.detail || "SKU not found")
+    setLookupData(null)
+  } finally {
+    setLoading(false)
+  }
+}
+
 
   // ================= QTY =================
   const handleQtyChange = (sku, value) => {
@@ -179,6 +180,20 @@ const fetchTransactions = async () => {
     toast.error("Failed to load transactions")
   }
 }
+useEffect(() => {
+  const sku = searchParams.get("sku")
+  const mode = searchParams.get("mode")
+
+  if (sku) {
+    setSkuInput(sku)
+
+    setActiveTab(mode === "out" ? "outward" : "inward")
+
+    // ✅ DIRECT lookup with correct SKU
+    lookupSku(sku)
+  }
+}, [searchParams])
+
 
 
   const filteredTransactions = useMemo(() => {
@@ -244,9 +259,7 @@ const fetchTransactions = async () => {
                 onKeyDown={e => e.key === "Enter" && lookupSku()}
                 placeholder="Parent SKU or Variant SKU"
               />
-              <Button className="mt-2" onClick={lookupSku}>
-                Lookup
-              </Button>
+             
             </div>
 
             {lookupData && (

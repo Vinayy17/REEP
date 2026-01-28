@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session, relationship
 from sqlalchemy.orm.attributes import flag_modified
 import os
 import logging
+from sqlalchemy import or_, func
+
 import json
 from pathlib import Path
 from copy import deepcopy
@@ -39,10 +41,14 @@ IST = timezone(timedelta(hours=5, minutes=30))
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# Database Configuration
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "mysql+pymysql://root:143%40Vinay@localhost/chinaligths")
+# DATABASE_URL = os.environ.get(
+#     "DATABASE_URL",
+#     "mysql+pymysql://chinaligths_user:StrongPassword123%21@localhost:3306/chinaligths?charset=utf8mb4"
+# )
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
@@ -114,6 +120,7 @@ class ProductModel(Base):
     images = Column(JSON, nullable=True)
 
     is_service = Column(Integer, default=0)
+    is_active = Column(Integer, default=1)
 
     created_at = Column(DateTime, default=datetime.utcnow)  # ✅ HERE
 
@@ -162,6 +169,10 @@ class InvoiceModel(Base):
     items = Column(Text, nullable=False)  # Store as JSON string
     subtotal = Column(Float, nullable=False)
     gst_amount = Column(Float, nullable=False, default=0)
+
+    gst_enabled = Column(Integer, default=1)  # 1 or 0
+    gst_rate = Column(Float, default=0)
+
     discount = Column(Float, nullable=False, default=0)
     total = Column(Float, nullable=False)
     payment_status = Column(String(50), nullable=False, default="pending")
@@ -213,10 +224,24 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def generate_product_code():
-    date_part = datetime.now(IST).strftime("%Y%m%d")
-    rand = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    return f"PRD-{date_part}-{rand}"
+def generate_product_code(db: Session, prefix: str = "RR") -> str:
+    # Get last product code with prefix RR
+    last_code = (
+        db.query(ProductModel.product_code)
+        .filter(ProductModel.product_code.like(f"{prefix}-%"))
+        .order_by(ProductModel.product_code.desc())
+        .first()
+    )
+
+    if not last_code:
+        next_number = 1
+    else:
+        # Extract numeric part: RR-0007 → 7
+        last_number = int(last_code[0].split("-")[1])
+        next_number = last_number + 1
+
+    return f"{prefix}-{next_number:04d}"
+
 
 def generate_qr(data: dict):
     qr_text = json.dumps(data, separators=(",", ":"))
@@ -276,6 +301,21 @@ def safe_images(value):
         return []
 def calculate_total_stock(variants: list) -> int:
     return sum(int(v.get("stock", 0)) for v in variants)
+
+def has_inventory(db: Session, product_id: str) -> bool:
+    return db.query(InventoryTransaction).filter(
+        InventoryTransaction.product_id == product_id
+    ).first() is not None
+
+
+def has_invoice(db: Session, product_id: str) -> bool:
+    invoices = db.query(InvoiceModel).all()
+    for inv in invoices:
+        items = parse_invoice_items(inv.items)
+        for item in items:
+            if item.get("product_id") == product_id:
+                return True
+    return False
 
 @api_router.post("/upload/product-image")
 def upload_product_image(
@@ -431,9 +471,14 @@ class InvoiceCreate(BaseModel):
     customer_email: str
     customer_address: Optional[str] = None
     items: List[InvoiceItem]
+
+    gst_enabled: bool = True
+    gst_rate: float = 0
+
     gst_amount: float = 0
     discount: float = 0
     payment_status: str = "pending"
+
 
 class DashboardStats(BaseModel):
     total_sales: float
@@ -492,30 +537,33 @@ class InventoryTransactionResponse(BaseModel):
     variant_sku: Optional[str]
     stock_after: int          # ✅ use this, not remaining_stock
     created_at: str
-def resolve_product_and_variant_by_sku(db: Session, sku: str):
-    sku = sku.strip()
+def resolve_product_and_variant_by_sku(db: Session, code: str):
+    code = code.strip()
 
-    # ================= 1️⃣ VARIANT FIRST (MOST IMPORTANT) =================
+    # ================= 1️⃣ VARIANT FIRST =================
     products = (
         db.query(ProductModel)
-        .filter(ProductModel.variants.isnot(None))
+        .filter(
+            ProductModel.is_active == 1,
+            ProductModel.variants.isnot(None)
+        )
         .with_for_update()
         .all()
     )
 
     for p in products:
         for v in (p.variants or []):
-            if v.get("v_sku", "").lower() == sku.lower():
-                # ✅ EXACT VARIANT MATCH
+            if v.get("v_sku", "").lower() == code.lower():
                 return p, v["v_sku"]
 
-    # ================= 2️⃣ PRODUCT LEVEL =================
+    # ================= 2️⃣ PRODUCT CODE / SKU =================
     product = (
         db.query(ProductModel)
         .filter(
+            ProductModel.is_active == 1,
             or_(
-                func.lower(ProductModel.sku) == sku.lower(),
-                func.lower(ProductModel.product_code) == sku.lower()
+                func.lower(ProductModel.sku) == code.lower(),
+                func.lower(ProductModel.product_code) == code.lower()
             )
         )
         .with_for_update()
@@ -709,6 +757,7 @@ def upload_variant_image(
 
     url = upload_image_to_cloudinary(file.file, folder="variant_images")
     return {"url": url}
+
 @api_router.get("/products")
 def get_products(
     page: int = Query(1, ge=1),
@@ -718,15 +767,18 @@ def get_products(
 ):
     offset = (page - 1) * limit
 
-    total = db.query(ProductModel).count()
+    base_query = db.query(ProductModel).filter(ProductModel.is_active == 1)
+
+    total = base_query.count()
 
     products = (
-        db.query(ProductModel)
-        .order_by(ProductModel.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    base_query
+    .order_by(ProductModel.created_at.desc())
+    .offset(offset)
+    .limit(limit)
+    .all()
+)
+
 
     result = []
 
@@ -762,14 +814,13 @@ def get_products(
         "total": total,
         "total_pages": ceil(total / limit),
     }
-
-@api_router.get("/inventory/lookup/{sku}")
+@api_router.get("/inventory/lookup/{code}")
 def inventory_lookup(
-    sku: str,
+    code: str,
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    product, variant_sku = resolve_product_and_variant_by_sku(db, sku)
+    product, variant_sku = resolve_product_and_variant_by_sku(db, code)
 
     variants = list(product.variants or [])
 
@@ -791,11 +842,7 @@ def inventory_lookup(
                     "total_stock": product.stock
                 }
 
-        # 🚨 Defensive: variant_sku resolved but not found in JSON
-        raise HTTPException(
-            status_code=500,
-            detail="Variant SKU resolved but missing in product variants"
-        )
+        raise HTTPException(500, "Variant SKU resolved but missing")
 
     # ================= PRODUCT LEVEL =================
     return {
@@ -844,6 +891,11 @@ def material_inward_by_sku(
         raise HTTPException(status_code=400, detail="Quantity must be > 0")
 
     product, variant_sku = resolve_product_and_variant_by_sku(db, request.sku)
+    if product.is_active == 0:
+        raise HTTPException(
+        status_code=400,
+        detail="Product is archived and cannot be used"
+    )
 
     if product.is_service == 1:
         raise HTTPException(status_code=400, detail="Inventory not allowed for services")
@@ -908,7 +960,6 @@ def material_inward_by_sku(
         "stock_after": stock_after,
         "variant_stock_after": variant_stock_after
     }
-
 @api_router.post("/inventory/material-outward/sku")
 def material_outward_by_sku(
     request: MaterialOutwardBySkuRequest,
@@ -918,10 +969,21 @@ def material_outward_by_sku(
     if request.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be > 0")
 
+    # ✅ FIRST resolve product
     product, variant_sku = resolve_product_and_variant_by_sku(db, request.sku)
 
+    # ✅ NOW product exists → safe check
+    if product.is_active == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Product is archived and cannot be used"
+        )
+
     if product.is_service == 1:
-        raise HTTPException(status_code=400, detail="Inventory not allowed for services")
+        raise HTTPException(
+            status_code=400,
+            detail="Inventory not allowed for services"
+        )
 
     variants = list(product.variants or [])
 
@@ -942,7 +1004,10 @@ def material_outward_by_sku(
             if v.get("v_sku") == variant_sku:
                 current_stock = int(v.get("stock", 0))
                 if current_stock < request.quantity:
-                    raise HTTPException(status_code=400, detail="Insufficient variant stock")
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Insufficient variant stock"
+                    )
 
                 v["stock"] = current_stock - request.quantity
                 variant_stock_after = v["stock"]
@@ -963,26 +1028,31 @@ def material_outward_by_sku(
     else:
         current_stock = int(product.stock or 0)
         if current_stock < request.quantity:
-            raise HTTPException(status_code=400, detail="Insufficient product stock")
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient product stock"
+            )
 
         stock_before = current_stock
         product.stock = current_stock - request.quantity
         stock_after = product.stock
 
-    db.add(InventoryTransaction(
-        id=str(uuid.uuid4()),
-        product_id=product.id,
-        type="OUT",
-        quantity=request.quantity,
-        source="MATERIAL_OUTWARD",
-        reason=request.reason,
-        stock_before=stock_before,
-        stock_after=stock_after,
-        variant_sku=variant_sku,
-        variant_stock_after=variant_stock_after,
-        created_by=current_user.id,
-        created_at=datetime.now(IST)
-    ))
+    db.add(
+        InventoryTransaction(
+            id=str(uuid.uuid4()),
+            product_id=product.id,
+            type="OUT",
+            quantity=request.quantity,
+            source="MATERIAL_OUTWARD",
+            reason=request.reason,
+            stock_before=stock_before,
+            stock_after=stock_after,
+            variant_sku=variant_sku,
+            variant_stock_after=variant_stock_after,
+            created_by=current_user.id,
+            created_at=datetime.now(IST),
+        )
+    )
 
     safe_commit(db)
 
@@ -990,7 +1060,7 @@ def material_outward_by_sku(
         "message": "Stock deducted successfully",
         "variant_sku": variant_sku,
         "stock_after": stock_after,
-        "variant_stock_after": variant_stock_after
+        "variant_stock_after": variant_stock_after,
     }
 
 @api_router.get("/inventory/transactions")
@@ -1042,9 +1112,11 @@ def create_product(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # 🔐 ADMIN ONLY
     if current_user.role != "admin":
         raise HTTPException(403, "Admin only")
 
+    # 🔍 VALIDATIONS
     if product_data.selling_price < product_data.min_selling_price:
         raise HTTPException(400, "Selling price cannot be below minimum selling price")
 
@@ -1059,15 +1131,67 @@ def create_product(
 
     parent_sku = product_data.sku or f"SKU-{uuid.uuid4().hex[:8].upper()}"
 
-    if db.query(ProductModel).filter(ProductModel.sku == parent_sku).first():
+    # ==========================================================
+    # 🔄 CHECK EXISTING SKU (ACTIVE OR ARCHIVED)
+    # ==========================================================
+    existing = db.query(ProductModel).filter(
+        ProductModel.sku == parent_sku
+    ).first()
+
+    # ==========================================================
+    # 🔄 RESTORE ARCHIVED PRODUCT
+    # ==========================================================
+    if existing:
+        if existing.is_active == 0:
+            # ❌ STOCK MUST REMAIN UNCHANGED
+            # ❌ INVENTORY HISTORY MUST REMAIN
+
+            existing.is_active = 1
+            existing.name = product_data.name
+            existing.description = product_data.description
+            existing.category_id = product_data.category_id
+            existing.cost_price = product_data.cost_price
+            existing.selling_price = product_data.selling_price
+            existing.min_selling_price = product_data.min_selling_price
+            existing.images = product_data.images
+            existing.is_service = product_data.is_service
+            existing.min_stock = product_data.min_stock if not product_data.is_service else 0
+
+            # 🔒 ERP RULE: NO STOCK DURING RESTORE
+            if product_data.is_service == 1:
+                existing.variants = []
+            else:
+                restored_variants = []
+                for v in product_data.variants or []:
+                    vd = v.dict()
+                    vd["stock"] = 0  # 🔒 FORCE ZERO
+                    vd["qr_code_url"] = generate_qr({
+                        "type": "variant",
+                        "product_name": product_data.name,
+                        "sku": parent_sku,
+                        "v_sku": vd.get("v_sku"),
+                        "price": product_data.selling_price,
+                        "color": vd.get("color"),
+                        "size": vd.get("size"),
+                    })
+                    restored_variants.append(vd)
+
+                existing.variants = restored_variants
+                existing.stock = 0  # 🔒 ALWAYS ZERO ON RESTORE
+
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+        # ❌ ACTIVE SKU EXISTS
         raise HTTPException(409, "SKU already exists")
 
-    product_code = generate_product_code()
+    # ==========================================================
+    # 🆕 CREATE NEW PRODUCT
+    # ==========================================================
+    product_code = generate_product_code(db)
 
-    # ================= STRICT ERP RULE =================
-    # ❌ NO STOCK DURING CREATION
-    total_stock = 0
-
+    # ❌ NO STOCK AT CREATION
     if product_data.is_service == 1:
         variants = []
         min_stock = 0
@@ -1075,12 +1199,11 @@ def create_product(
         variants = []
         for v in product_data.variants or []:
             vd = v.dict()
-            vd["stock"] = 0               # 🔒 FORCE ZERO
+            vd["stock"] = 0  # 🔒 FORCE ZERO
             variants.append(vd)
-
         min_stock = product_data.min_stock
 
-    # Product QR
+    # 📦 PRODUCT QR
     qr_code_url = generate_qr({
         "type": "product",
         "name": product_data.name,
@@ -1088,7 +1211,7 @@ def create_product(
         "price": product_data.selling_price,
     })
 
-    # Variant QR (no stock impact)
+    # 📦 VARIANT QR
     enriched_variants = []
     for v in variants:
         v["qr_code_url"] = generate_qr({
@@ -1112,12 +1235,13 @@ def create_product(
         cost_price=product_data.cost_price,
         selling_price=product_data.selling_price,
         min_selling_price=product_data.min_selling_price,
-        stock=0,                          # 🔒 ALWAYS ZERO
+        stock=0,                 # 🔒 ALWAYS ZERO
         min_stock=min_stock,
         variants=enriched_variants,
         images=product_data.images,
         is_service=product_data.is_service,
         qr_code_url=qr_code_url,
+        is_active=1,
         created_at=datetime.now(IST)
     )
 
@@ -1126,6 +1250,7 @@ def create_product(
     db.refresh(product)
 
     return product
+
 
 @api_router.put("/products/{product_id}")
 def update_product(
@@ -1192,23 +1317,40 @@ def update_product(
     db.refresh(product)
     return product
 
-
 @api_router.delete("/products/{product_id}")
-def delete_product(
+def delete_or_archive_product(
     product_id: str,
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+        raise HTTPException(403, "Admin only")
 
-    product = db.query(ProductModel).filter(ProductModel.id == product_id).first()
+    product = db.query(ProductModel).filter(
+        ProductModel.id == product_id,
+        ProductModel.is_active == 1
+    ).first()
+
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    
-    db.delete(product)
+        raise HTTPException(404, "Product not found")
+
+    if not has_inventory(db, product_id) and not has_invoice(db, product_id):
+        # ✅ HARD DELETE
+        db.delete(product)
+        db.commit()
+        return {
+            "message": "Product deleted permanently",
+            "action": "hard_delete"
+        }
+
+    # ❌ USED → ARCHIVE
+    product.is_active = 0
     db.commit()
-    return {"message": "Product deleted successfully"}
+    return {
+        "message": "Product archived (used in inventory/invoices)",
+        "action": "archived"
+    }
+
 
 @api_router.post("/customers", response_model=Customer)
 def create_customer(
@@ -1390,6 +1532,9 @@ def get_invoices(
                 "items": parse_invoice_items(inv.items),
                 "subtotal": inv.subtotal,
                 "gst_amount": inv.gst_amount,
+                "gst_enabled": bool(inv.gst_enabled),
+                "gst_rate": inv.gst_rate,
+
                 "discount": inv.discount,
                 "total": inv.total,
                 "payment_status": inv.payment_status,
@@ -1427,12 +1572,12 @@ def create_invoice(
     if not customer:
         customer = CustomerModel(
             id=str(uuid.uuid4()),
-            name=invoice_data.customer_name,
+            name=invoice_data.customer_name or "Walk-in",
             email=invoice_data.customer_email
             or f"{invoice_data.customer_phone}@example.com",
             phone=invoice_data.customer_phone,
             address=invoice_data.customer_address,
-            created_at=datetime.now(IST)
+            created_at=datetime.now(IST),
         )
         db.add(customer)
         db.flush()
@@ -1452,6 +1597,13 @@ def create_invoice(
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
 
+        # ✅ ARCHIVED PRODUCT CHECK (CORRECT PLACE)
+        if product.is_active == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Product '{product.name}' is archived and cannot be sold",
+            )
+
         price = product.selling_price
         quantity = item.quantity
         line_total = price * quantity
@@ -1464,9 +1616,10 @@ def create_invoice(
                 "sku": item.sku or product.sku,
                 "product_name": product.name,
                 "quantity": quantity,
-                "gst_rate": 18,
+                "gst_rate": item.gst_rate,
+
                 "price": price,
-                "total": line_total
+                "total": line_total,
             })
             continue
 
@@ -1474,13 +1627,13 @@ def create_invoice(
         variants = list(product.variants or [])
 
         # =========================================================
-        # 🔹 PRODUCT HAS VARIANTS → VARIANT-LEVEL INVENTORY ONLY
+        # 🔹 PRODUCT WITH VARIANTS
         # =========================================================
         if variants:
             if not item.sku:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Product {product.name} has variants. Variant SKU required."
+                    detail=f"Product {product.name} has variants. Variant SKU required.",
                 )
 
             total_before = calculate_total_stock(variants)
@@ -1491,10 +1644,11 @@ def create_invoice(
             for v in variants:
                 if v.get("v_sku") == item.sku:
                     current_stock = int(v.get("stock", 0))
+
                     if current_stock < quantity:
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Insufficient stock for variant {item.sku}. Available: {current_stock}"
+                            detail=f"Insufficient stock for variant {item.sku}. Available: {current_stock}",
                         )
 
                     v["stock"] = current_stock - quantity
@@ -1506,17 +1660,16 @@ def create_invoice(
                         "variant_name": v.get("variant_name"),
                         "color": v.get("color"),
                         "size": v.get("size"),
-                        "v_image_url": v.get("image_url")
+                        "v_image_url": v.get("image_url"),
                     }
                     break
 
             if not variant_found:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Variant SKU {item.sku} not found"
+                    detail=f"Variant SKU {item.sku} not found",
                 )
 
-            # 🔥 CRITICAL FIX: DERIVE PRODUCT STOCK FROM VARIANTS
             derived_stock = calculate_total_stock(variants)
 
             product.variants = variants
@@ -1524,53 +1677,57 @@ def create_invoice(
 
             flag_modified(product, "variants")
             flag_modified(product, "stock")
+            db.flush()
 
-            db.flush()  # 🔥 REQUIRED before inventory transaction
-
-            db.add(InventoryTransaction(
-                id=str(uuid.uuid4()),
-                product_id=product.id,
-                type="OUT",
-                quantity=quantity,
-                source="INVOICE",
-                reason="Invoice",
-                stock_before=total_before,          # product total before
-                stock_after=derived_stock,          # product total after
-                variant_sku=item.sku,
-                variant_stock_after=variant_stock_after,
-                created_by=current_user.id,
-                created_at=datetime.now(IST)
-            ))
+            db.add(
+                InventoryTransaction(
+                    id=str(uuid.uuid4()),
+                    product_id=product.id,
+                    type="OUT",
+                    quantity=quantity,
+                    source="INVOICE",
+                    reason="Invoice",
+                    stock_before=total_before,
+                    stock_after=derived_stock,
+                    variant_sku=item.sku,
+                    variant_stock_after=variant_stock_after,
+                    created_by=current_user.id,
+                    created_at=datetime.now(IST),
+                )
+            )
 
         # =========================================================
-        # 🔹 PRODUCT WITHOUT VARIANTS → PRODUCT-LEVEL INVENTORY
+        # 🔹 PRODUCT WITHOUT VARIANTS
         # =========================================================
         else:
             stock_before = int(product.stock or 0)
+
             if stock_before < quantity:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Insufficient stock for {product.name}. Available: {stock_before}"
+                    detail=f"Insufficient stock for {product.name}. Available: {stock_before}",
                 )
 
             product.stock = stock_before - quantity
             flag_modified(product, "stock")
             db.flush()
 
-            db.add(InventoryTransaction(
-                id=str(uuid.uuid4()),
-                product_id=product.id,
-                type="OUT",
-                quantity=quantity,
-                source="INVOICE",
-                reason="Invoice",
-                stock_before=stock_before,
-                stock_after=product.stock,
-                variant_sku=None,
-                variant_stock_after=None,
-                created_by=current_user.id,
-                created_at=datetime.now(IST)
-            ))
+            db.add(
+                InventoryTransaction(
+                    id=str(uuid.uuid4()),
+                    product_id=product.id,
+                    type="OUT",
+                    quantity=quantity,
+                    source="INVOICE",
+                    reason="Invoice",
+                    stock_before=stock_before,
+                    stock_after=product.stock,
+                    variant_sku=None,
+                    variant_stock_after=None,
+                    created_by=current_user.id,
+                    created_at=datetime.now(IST),
+                )
+            )
 
             variant_details = None
 
@@ -1580,55 +1737,61 @@ def create_invoice(
             "product_name": product.name,
             "variant_info": variant_details,
             "image_url": (
-                variant_details["v_image_url"]
-                if variant_details and variant_details.get("v_image_url")
+                variant_details.get("v_image_url")
+                if variant_details
                 else (product.images[0] if product.images else None)
             ),
             "quantity": quantity,
-            "gst_rate": 18,
+            "gst_rate": item.gst_rate,
+
             "price": price,
-            "total": line_total
+            "total": line_total,
         })
 
-    # ================= INVOICE =================
-    total = subtotal + invoice_data.gst_amount - invoice_data.discount
+    # ================= INVOICE === ==============
+    if invoice_data.gst_enabled:
+        gst_amount = round(
+        (subtotal * invoice_data.gst_rate) / 100,
+        2
+    )
+    else:
+      gst_amount = 0
+
+
+    total = subtotal + gst_amount - invoice_data.discount
     invoice_number = generate_invoice_number(db)
 
     invoice = InvoiceModel(
-        id=str(uuid.uuid4()),
-        invoice_number=invoice_number,
-        customer_id=customer.id,
-        customer_name=customer.name,
-        customer_phone=customer.phone,
-        customer_address=customer.address,
-        items=json.dumps(invoice_items),
-        subtotal=subtotal,
-        gst_amount=invoice_data.gst_amount,
-        discount=invoice_data.discount,
-        total=total,
-        payment_status=invoice_data.payment_status,
-        created_at=datetime.now(IST)
-    )
+    id=str(uuid.uuid4()),
+    invoice_number=invoice_number,
+    customer_id=customer.id,
+    customer_name=customer.name,
+    customer_phone=customer.phone,
+    customer_address=customer.address,
+    items=json.dumps(invoice_items),
+
+    subtotal=subtotal,
+    gst_amount=gst_amount,
+    gst_rate=invoice_data.gst_rate,
+    gst_enabled=1 if invoice_data.gst_enabled else 0,
+
+    discount=invoice_data.discount,
+    total=total,
+    payment_status=invoice_data.payment_status,
+    created_at=datetime.now(IST),
+)
+
 
     db.add(invoice)
     db.commit()
     db.refresh(invoice)
 
-    return Invoice(
-        id=invoice.id,
-        invoice_number=invoice.invoice_number,
-        customer_id=invoice.customer_id,
-        customer_name=invoice.customer_name,
-        customer_phone=invoice.customer_phone,
-        customer_address=invoice.customer_address,
-        items=invoice_items,
-        subtotal=subtotal,
-        gst_amount=invoice.gst_amount,
-        discount=invoice.discount,
-        total=invoice.total,
-        payment_status=invoice.payment_status,
-        created_at=invoice.created_at.isoformat()
-    )
+    return {
+        "id": invoice.id,
+        "invoice_number": invoice.invoice_number,
+        "total": invoice.total,
+        "created_at": invoice.created_at,
+    }
 
 
 @api_router.get(
@@ -1665,10 +1828,14 @@ def list_products(
     db: Session = Depends(get_db)
 ):
     products = (
-        db.query(ProductModel)
-        .filter(ProductModel.is_service == 0)  # ✅ EXCLUDE SERVICES
-        .all()
+    db.query(ProductModel)
+    .filter(
+        ProductModel.is_service == 0,
+        ProductModel.is_active == 1   # ✅ ADD
     )
+    .all()
+)
+
 
     return [
         {
@@ -1691,17 +1858,19 @@ def search_products(
 ):
     search_term = f"%{q.lower().strip()}%"
     products = (
-        db.query(ProductModel)
-        .filter(
-            or_(
-                func.lower(ProductModel.name).like(search_term),
-                func.lower(ProductModel.sku).like(search_term),
-                func.lower(ProductModel.product_code).like(search_term)
-            )
+    db.query(ProductModel)
+    .filter(
+        ProductModel.is_active == 1,   # ✅ ADD
+        or_(
+            func.lower(ProductModel.name).like(search_term),
+            func.lower(ProductModel.sku).like(search_term),
+            func.lower(ProductModel.product_code).like(search_term)
         )
-        .limit(20)
-        .all()
     )
+    .limit(20)
+    .all()
+)
+
     
     return [
         {
@@ -2080,76 +2249,71 @@ def upload_qr_to_cloudinary(pil_image, folder="qr"):
         resource_type="image"
     )
     return result["secure_url"]
-
-@api_router.get("/products/sku/{sku}")
+@api_router.get("/products/sku/{code}")
 def get_product_by_sku(
-    sku: str,
+    code: str,
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    sku = sku.strip()
+    code = code.strip()
 
-    product = db.query(ProductModel).filter(
-        (ProductModel.sku == sku) |
-        (ProductModel.product_code == sku)
-    ).first()
-    
-    if product:
-        return {
-            "id": product.id,
-            "product_code": product.product_code,
-            "sku": product.sku,
-            "name": product.name,
-            "description": product.description,
-            "category_id": product.category_id,
-            "category_name": product.category.name if product.category else None,
-            "selling_price": product.selling_price,
-            "min_selling_price": product.min_selling_price,
-            "stock": product.stock,
-            "min_stock": product.min_stock,
-            "is_service": product.is_service,
-            "images": product.images or [],
-            "variants": product.variants or [],
-            "variant": None  # No specific variant matched
-        }
-    
-    all_products = db.query(ProductModel).all()
-    
-    for prod in all_products:
-        if prod.variants:
-            for variant in prod.variants:
-                if variant.get("v_sku") == sku:
-                    v_price = variant.get("v_selling_price") or variant.get("v_price") or prod.selling_price
-                    v_image = variant.get("image_url") or variant.get("v_image_url")
-                    
-                    return {
-                        "id": prod.id,
-                        "product_code": prod.product_code,
-                        "sku": prod.sku,
-                        "name": prod.name,
-                        "description": prod.description,
-                        "category_id": prod.category_id,
-                        "category_name": prod.category.name if prod.category else None,
-                        "selling_price": v_price,
-                        "min_selling_price": prod.min_selling_price,
-                        "stock": variant.get("stock", 0),
-                        "min_stock": prod.min_stock,
-                        "is_service": prod.is_service,
-                        "images": prod.images or [],
-                        "variants": prod.variants or [],
-                        "variant": {
-                            "v_sku": variant.get("v_sku"),
-                            "v_image_url": v_image,
-                            "variant_name": variant.get("variant_name"),
-                            "size": variant.get("size"),
-                            "color": variant.get("color"),
-                            "stock": variant.get("stock", 0),
-                            "v_price": v_price
-                        }
+    product, variant_sku = resolve_product_and_variant_by_sku(db, code)
+
+    # ================= VARIANT LEVEL =================
+    if variant_sku:
+        for v in product.variants or []:
+            if v.get("v_sku") == variant_sku:
+                v_price = (
+                    v.get("v_selling_price")
+                    or v.get("v_price")
+                    or product.selling_price
+                )
+
+                return {
+                    "id": product.id,
+                    "product_code": product.product_code,
+                    "sku": product.sku,
+                    "name": product.name,
+                    "description": product.description,
+                    "category_id": product.category_id,
+                    "category_name": product.category.name if product.category else None,
+                    "selling_price": v_price,
+                    "min_selling_price": product.min_selling_price,
+                    "stock": v.get("stock", 0),
+                    "min_stock": product.min_stock,
+                    "is_service": product.is_service,
+                    "images": product.images or [],
+                    "variants": product.variants or [],
+                    "variant": {
+                        "v_sku": v.get("v_sku"),
+                        "variant_name": v.get("variant_name"),
+                        "size": v.get("size"),
+                        "color": v.get("color"),
+                        "stock": v.get("stock", 0),
+                        "v_price": v_price
                     }
-    
-    return JSONResponse(status_code=404, content={"message": "Product not found"})
+                }
 
+        raise HTTPException(500, "Variant resolved but missing")
+
+    # ================= PRODUCT LEVEL =================
+    return {
+        "id": product.id,
+        "product_code": product.product_code,
+        "sku": product.sku,
+        "name": product.name,
+        "description": product.description,
+        "category_id": product.category_id,
+        "category_name": product.category.name if product.category else None,
+        "selling_price": product.selling_price,
+        "min_selling_price": product.min_selling_price,
+        "stock": product.stock,
+        "min_stock": product.min_stock,
+        "is_service": product.is_service,
+        "images": product.images or [],
+        "variants": product.variants or [],
+        "variant": None
+    }
 
 app.include_router(api_router)
 
@@ -2157,9 +2321,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept"
+    ],
 )
+
 
 logging.basicConfig(
     level=logging.INFO,
