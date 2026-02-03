@@ -1,4 +1,5 @@
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom"
+import { useState } from "react"
 import { useAuth } from "@/context/AuthContext"
 import {
   LayoutDashboard,
@@ -6,11 +7,14 @@ import {
   Users,
   FileText,
   FolderTree,
+  ClipboardList,
   LogOut,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
-// 🔥 ADD THESE IMPORTS
+// 🔥 Toast
 import { ToastProvider, ToastViewport } from "@/components/ui/toast"
 
 const Layout = () => {
@@ -18,10 +22,13 @@ const Layout = () => {
   const navigate = useNavigate()
   const { user, logout } = useAuth()
 
+  const [collapsed, setCollapsed] = useState(false)
+
   const navItems = [
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/products", icon: Package, label: "Products" },
     { path: "/customers", icon: Users, label: "Customers" },
+    { path: "/requirements", icon: ClipboardList, label: "Requirements" },
     { path: "/invoices", icon: FileText, label: "Invoices" },
     { path: "/categories", icon: FolderTree, label: "Categories" },
     { path: "/inventory", icon: FolderTree, label: "Inventory" },
@@ -34,15 +41,14 @@ const Layout = () => {
 
   return (
     <ToastProvider>
-      {/* 🔥 THIS CONTROLS TOAST POSITION (LEFT SIDE) */}
       <ToastViewport />
 
       <div className="flex h-screen bg-background flex-col md:flex-row">
         {/* ================= MOBILE TOP NAV ================= */}
         <header className="md:hidden flex items-center justify-between px-4 py-3 border-b bg-paper">
-          <h1 className="text-lg font-bold text-primary">Inven</h1>
+          <h1 className="text-lg font-bold text-primary">Outrans</h1>
 
-          <nav className="flex gap-4">
+          <nav className="flex gap-3">
             {navItems.map((item) => {
               const Icon = item.icon
               const isActive = location.pathname === item.path
@@ -66,25 +72,21 @@ const Layout = () => {
 
         {/* ================= DESKTOP SIDEBAR ================= */}
         <aside
-          className="hidden md:flex group w-16 hover:w-64 transition-all duration-300
-                     border-r border-border bg-paper flex-col overflow-hidden"
+          className={`hidden md:flex ${
+            collapsed ? "w-16" : "w-64"
+          } transition-all duration-300
+          border-r border-border bg-paper flex-col`}
         >
           {/* Logo */}
           <div className="p-4 border-b border-border">
-            <h1
-              className="text-xl font-bold text-primary
-                         opacity-0 group-hover:opacity-100
-                         transition-opacity"
-            >
-              InvenTrack
+            <h1 className="text-xl font-bold text-primary">
+              {collapsed ? "O" : "Outrans"}
             </h1>
-            <p
-              className="text-xs text-foreground-muted mt-1
-                         opacity-0 group-hover:opacity-100
-                         transition-opacity"
-            >
-              Inventory Management
-            </p>
+            {!collapsed && (
+              <p className="text-xs text-foreground-muted mt-1">
+                Inventory Management
+              </p>
+            )}
           </div>
 
           {/* Navigation */}
@@ -105,36 +107,48 @@ const Layout = () => {
                     }`}
                 >
                   <Icon className="w-5 h-5 shrink-0" />
-                  <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    {item.label}
-                  </span>
+                  {!collapsed && <span>{item.label}</span>}
                 </Link>
               )
             })}
           </nav>
 
-          {/* User + Logout */}
+          {/* User Section */}
           <div className="p-3 border-t border-border">
             <div className="flex items-center gap-3 px-2 py-2">
               <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-bold">
                 {user?.name?.charAt(0)?.toUpperCase()}
               </div>
 
-              <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                <p className="text-sm font-medium">{user?.name}</p>
-                <p className="text-xs text-foreground-muted">{user?.email}</p>
-              </div>
+              {!collapsed && (
+                <div>
+                  <p className="text-sm font-medium">{user?.name}</p>
+                  <p className="text-xs text-foreground-muted">{user?.email}</p>
+                </div>
+              )}
             </div>
 
             <Button
               onClick={handleLogout}
               variant="outline"
-              className="w-full justify-center group-hover:justify-start gap-2 mt-2"
+              className="w-full justify-center gap-2 mt-2"
             >
               <LogOut className="w-4 h-4" />
-              <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-                Logout
-              </span>
+              {!collapsed && "Logout"}
+            </Button>
+
+            {/* Collapse Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setCollapsed(!collapsed)}
+              className="mx-auto mt-3"
+            >
+              {collapsed ? (
+                <ChevronRight className="w-4 h-4" />
+              ) : (
+                <ChevronLeft className="w-4 h-4" />
+              )}
             </Button>
           </div>
         </aside>

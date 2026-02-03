@@ -15,6 +15,8 @@ import {
   AlertTriangle,
   TrendingUp,
   Activity,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import {
   LineChart,
@@ -27,86 +29,78 @@ import {
   BarChart,
   Bar,
 } from "recharts"
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`
-
-/* ================= TOOLTIP ================= */
-const SalesTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null
-  const d = payload[0].payload
-
-  return (
-    <div className="bg-background border rounded-lg p-3 shadow-md text-sm">
-      <p className="font-semibold mb-2">{label}</p>
-      <p className="text-indigo-500">● Total: ₹{d.total.toFixed(2)}</p>
-      <p className="text-green-600">● Paid: ₹{d.paid.toFixed(2)}</p>
-      <p className="text-orange-500">● Pending: ₹{d.pending.toFixed(2)}</p>
-      <p className="text-red-500">● Overdue: ₹{d.overdue.toFixed(2)}</p>
-    </div>
-  )
-}
 
 /* ================= DASHBOARD ================= */
 export default function Dashboard() {
   const [filter, setFilter] = useState("today")
 
   const [stats, setStats] = useState(null)
-  const [today, setToday] = useState(null)
   const [salesData, setSalesData] = useState([])
-  const [hourlySales, setHourlySales] = useState([])
   const [topProducts, setTopProducts] = useState([])
   const [inventoryMove, setInventoryMove] = useState([])
   const [lowStock, setLowStock] = useState([])
   const [activity, setActivity] = useState([])
+
+  // 🔥 Stock Ageing
+  const [ageBucket, setAgeBucket] = useState("all")
+  const [ageing, setAgeing] = useState([])
+  const [agePage, setAgePage] = useState(1)
+  const [agePages, setAgePages] = useState(1)
+
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     loadDashboard()
   }, [filter])
 
+  useEffect(() => {
+    loadAgeing()
+  }, [ageBucket, agePage])
+
   const loadDashboard = async () => {
     try {
       setLoading(true)
-
-      const requests = [
+      const res = await Promise.all([
         axios.get(`${API}/dashboard?filter=${filter}`),
         axios.get(`${API}/dashboard/sales?filter=${filter}`),
         axios.get(`${API}/dashboard/top-products`),
         axios.get(`${API}/dashboard/inventory-movement`),
         axios.get(`${API}/dashboard/low-stock`),
         axios.get(`${API}/dashboard/activity`),
-      ]
+      ])
 
-      if (filter === "today") {
-        requests.push(
-          axios.get(`${API}/dashboard/today`),
-          axios.get(`${API}/dashboard/hourly-sales`)
-        )
-      }
-
-      const res = await Promise.all(requests)
-
-      let i = 0
-      setStats(res[i++].data)
-      setSalesData(res[i++].data || [])
-      setTopProducts(res[i++].data || [])
-      setInventoryMove(res[i++].data || [])
-      setLowStock(res[i++].data || [])
-      setActivity(res[i++].data || [])
-
-      if (filter === "today") {
-        setToday(res[i++].data)
-        setHourlySales(res[i++].data || [])
-      } else {
-        setToday(null)
-        setHourlySales([])
-      }
+      setStats(res[0].data)
+      setSalesData(res[1].data || [])
+      setTopProducts(res[2].data || [])
+      setInventoryMove(res[3].data || [])
+      setLowStock(res[4].data || [])
+      setActivity(res[5].data || [])
     } catch {
       toast.error("Failed to load dashboard")
     } finally {
       setLoading(false)
     }
+  }
+
+  const loadAgeing = async () => {
+    const bucketQuery = ageBucket === "all" ? "" : `&bucket=${ageBucket}`
+    const res = await axios.get(
+      `${API}/products/ageing?page=${agePage}&limit=10${bucketQuery}`
+    )
+    setAgeing(res.data.data)
+    setAgePages(res.data.total_pages)
   }
 
   if (loading) {
@@ -123,7 +117,7 @@ export default function Dashboard() {
       <div>
         <h1 className="text-4xl font-bold">Dashboard</h1>
         <p className="text-muted-foreground mt-1">
-          Business overview & performance
+          Business overview & stock insights
         </p>
       </div>
 
@@ -141,7 +135,7 @@ export default function Dashboard() {
         </select>
       </div>
 
-      {/* KPI CARDS */}
+      {/* KPI */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Total Sales" value={`₹${stats.total_sales.toFixed(2)}`} icon={DollarSign} />
         <StatCard title="Orders" value={stats.total_orders} icon={ShoppingCart} />
@@ -149,116 +143,112 @@ export default function Dashboard() {
         <StatCard title="Low Stock" value={stats.low_stock_items} icon={AlertTriangle} />
       </div>
 
-      {/* TODAY AT A GLANCE */}
-      {filter === "today" && today && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Today at a Glance</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-            <MiniStat label="Invoices" value={today.invoices_today} />
-            <MiniStat label="Items Sold" value={today.items_sold_today} />
-            <MiniStat label="Inventory OUT" value={today.inventory_out_today} />
-            <MiniStat label="New Customers" value={today.new_customers_today} />
-          </CardContent>
-        </Card>
-      )}
+      {/* SALES TREND */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Sales Trend</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={salesData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Line dataKey="total" stroke="#6366f1" strokeWidth={3} />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
-      {/* SALES TREND + SECONDARY GRAPH */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* SALES TREND */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Sales Trend</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={salesData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip content={<SalesTooltip />} />
-                <Line dataKey="total" stroke="#6366f1" strokeWidth={3} />
-                <Line dataKey="paid" stroke="#22c55e" strokeWidth={2} />
-                <Line dataKey="pending" stroke="#f97316" strokeDasharray="5 5" />
-                <Line dataKey="overdue" stroke="#ef4444" strokeDasharray="5 5" />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
+      {/* 🔥 STOCK AGEING */}
+      <Card>
+        <CardHeader className="flex flex-row justify-between items-center">
+          <CardTitle>Stock Ageing</CardTitle>
 
-        {/* CONDITIONAL BAR GRAPH */}
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {filter === "today"
-                ? "Hourly Sales (Today)"
-                : filter === "last_10_days"
-                ? "Last 10 Days Sales"
-                : filter === "last_30_days"
-                ? "Last 30 Days Sales"
-                : "Sales Distribution"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              {filter === "today" ? (
-                <BarChart data={hourlySales}>
-                  <XAxis dataKey="label" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="total" fill="#22c55e" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              ) : (
-                <BarChart data={salesData}>
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="total" fill="#6366f1" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              )}
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div>
+        <Select
+  value={ageBucket}
+  onValueChange={(v) => {
+    setAgeBucket(v)
+    setAgePage(1)
+  }}
+>
+  <SelectTrigger className="w-40 bg-black text-white border border-border focus:ring-1 focus:ring-primary">
+    <SelectValue placeholder="Filter" />
+  </SelectTrigger>
 
-      {/* OTHER CHARTS */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Top Selling Products</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={topProducts}>
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="quantity" fill="#6366f1" />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
+  <SelectContent className="bg-black text-white border border-border">
+    <SelectItem value="all" className="focus:bg-white/10">
+      All
+    </SelectItem>
+    <SelectItem value="latest" className="focus:bg-white/10">
+      Latest
+    </SelectItem>
+    <SelectItem value="new" className="focus:bg-white/10">
+      New
+    </SelectItem>
+    <SelectItem value="medium" className="focus:bg-white/10">
+      Medium
+    </SelectItem>
+    <SelectItem value="old" className="focus:bg-white/10">
+      Old
+    </SelectItem>
+    <SelectItem value="very_old" className="focus:bg-white/10">
+      Very Old
+    </SelectItem>
+    <SelectItem value="dead_stock" className="focus:bg-white/10">
+      Dead Stock
+    </SelectItem>
+  </SelectContent>
+</Select>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Inventory Movement</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={inventoryMove}>
-                <XAxis dataKey="day" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="inward" fill="#22c55e" />
-                <Bar dataKey="outward" fill="#ef4444" />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div>
+        </CardHeader>
 
-      {/* PANELS */}
+        <CardContent className="space-y-3">
+          {ageing.map(p => (
+            <div key={p.sku} className="flex justify-between border rounded-lg p-3">
+              <div>
+                <p className="font-medium">{p.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {p.product_code} • {p.sku}
+                </p>
+                {p.first_inward_date && (
+                  <p className="text-xs text-muted-foreground">
+                    Inward: {new Date(p.first_inward_date).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+
+              <div className="text-right space-y-1">
+                <p className="font-semibold">Qty: {p.qty}</p>
+                <Badge>{p.age_bucket.replace("_", " ").toUpperCase()}</Badge>
+              </div>
+            </div>
+          ))}
+
+          {/* PAGINATION */}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={agePage === 1}
+              onClick={() => setAgePage(p => p - 1)}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={agePage === agePages}
+              onClick={() => setAgePage(p => p + 1)}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* LOW STOCK + ACTIVITY */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
@@ -266,11 +256,11 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-2">
             {lowStock.map((p, i) => (
-              <div key={i} className="flex justify-between text-sm">
+              <div key={i} className="flex justify-between bg-muted rounded-md p-2">
                 <span>{p.product_name}</span>
-                <span className="text-destructive font-semibold">
+                <Badge variant="destructive">
                   {p.stock}/{p.min_stock}
-                </span>
+                </Badge>
               </div>
             ))}
           </CardContent>
@@ -280,9 +270,9 @@ export default function Dashboard() {
           <CardHeader>
             <CardTitle>Recent Activity</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm">
+          <CardContent className="space-y-2">
             {activity.map((a, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex gap-2 text-sm items-center">
                 <Activity className="w-4 h-4 text-muted-foreground" />
                 <span>{a.text}</span>
               </div>
@@ -294,7 +284,7 @@ export default function Dashboard() {
   )
 }
 
-/* ================= COMPONENTS ================= */
+/* ================= SMALL COMPONENTS ================= */
 
 const StatCard = ({ title, value, icon: Icon }) => (
   <Card>
@@ -309,11 +299,4 @@ const StatCard = ({ title, value, icon: Icon }) => (
       </p>
     </CardContent>
   </Card>
-)
-
-const MiniStat = ({ label, value }) => (
-  <div>
-    <p className="text-xs text-muted-foreground">{label}</p>
-    <p className="text-2xl font-bold">{value}</p>
-  </div>
 )

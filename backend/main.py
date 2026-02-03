@@ -34,6 +34,17 @@ from fastapi import UploadFile, File
 from sqlalchemy.exc import OperationalError
 import time
 from fastapi.responses import JSONResponse
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
+import redis.asyncio as redis
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -42,14 +53,23 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "mysql+pymysql://root:143%40Vinay@localhost/chinaligths")
+    "DATABASE_URL")
+   
 # DATABASE_URL = os.environ.get(
 #     "DATABASE_URL",
 #     "mysql+pymysql://chinaligths_user:StrongPassword123%21@localhost:3306/chinaligths?charset=utf8mb4"
 # )
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=5,          # max connections per worker
+    max_overflow=10,      # temporary burst
+    pool_recycle=1800,    # avoid MySQL "server has gone away"
+    pool_timeout=30,     # wait max 30s for a connection
+    connect_args={"connect_timeout": 10},
+
+)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
 
@@ -77,7 +97,27 @@ class UserModel(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     password = Column(String(255), nullable=False)
     role = Column(String(50), default="user")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(IST))
+
+class RequirementModel(Base):
+    __tablename__ = "requirements"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    customer_name = Column(String(255), nullable=False)
+    customer_phone = Column(String(50), nullable=False)
+
+    requirement_items = Column(Text, nullable=False)  # JSON string
+    priority = Column(String(20), default="normal")  # low | normal | high | urgent
+
+    status = Column(String(20), default="pending", index=True)
+
+    created_by = Column(String(36))
+    created_by_name = Column(String(100))
+
+    created_at = Column(DateTime, default=lambda: datetime.now(IST), index=True)
+
+    completed_at = Column(DateTime, nullable=True)
 
 class CategoryModel(Base):
     __tablename__ = "categories"
@@ -105,7 +145,7 @@ class ProductModel(Base):
     category_id = Column(String(36), ForeignKey("categories.id"), nullable=False)
 
     # 💰 Pricing (COMMON)
-    cost_price = Column(Float, nullable=False)
+    cost_price = Column(Float, nullable=False, default=0)
     min_selling_price = Column(Float, nullable=False)
     selling_price = Column(Float, nullable=False)
 
@@ -122,7 +162,7 @@ class ProductModel(Base):
     is_service = Column(Integer, default=0)
     is_active = Column(Integer, default=1)
 
-    created_at = Column(DateTime, default=datetime.utcnow)  # ✅ HERE
+    created_at = Column(DateTime, default=lambda: datetime.now(IST))
 
 
     category = relationship("CategoryModel", back_populates="products")
@@ -138,6 +178,7 @@ class InventoryTransaction(Base):
     reason = Column(String(255))
     created_by = Column(String(36))
     created_at = Column(DateTime, default=lambda: datetime.now(IST))
+    created_by_name = Column(String(100))        # ✅ ADD THIS
 
     stock_before = Column(Integer, nullable=False, default=0)
     stock_after = Column(Integer, nullable=False, default=0)
@@ -168,10 +209,14 @@ class InvoiceModel(Base):
     customer_address = Column(Text, nullable=True)
     items = Column(Text, nullable=False)  # Store as JSON string
     subtotal = Column(Float, nullable=False)
+    additional_amount = Column(Float, nullable=False, default=0)  # ✅ For manual charges
+    additional_label = Column(String(255), nullable=True)  # ✅ For charge description
     gst_amount = Column(Float, nullable=False, default=0)
+    created_by = Column(String(36))          # ✅ ADD THIS
 
     gst_enabled = Column(Integer, default=1)  # 1 or 0
     gst_rate = Column(Float, default=0)
+    created_by_name = Column(String(100))         # ✅ ADD THIS
 
     discount = Column(Float, nullable=False, default=0)
     total = Column(Float, nullable=False)
@@ -180,10 +225,17 @@ class InvoiceModel(Base):
     customer = relationship("CustomerModel", back_populates="invoices") # FIX: Should be back_populates="invoices" if relationship is defined in CustomerModel
 
 # Create tables
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 # app.mount("/static", StaticFiles(directory="static"), name="static")
+@app.on_event("startup")
+async def startup():
+    redis_client = redis.from_url(
+        "redis://localhost:6379",
+        encoding="utf-8",
+        decode_responses=True
+    )
+    await FastAPILimiter.init(redis_client)
 
 api_router = APIRouter(prefix="/api")
 
@@ -317,13 +369,14 @@ def has_invoice(db: Session, product_id: str) -> bool:
                 return True
     return False
 
-@api_router.post("/upload/product-image")
+@api_router.post( "/upload/product-image",dependencies=[Depends(RateLimiter(times=20, seconds=60))])
 def upload_product_image(
     file: UploadFile = File(...),
     current_user: UserModel = Depends(get_current_user)
 ):
     # 🔐 Only admin
-    if current_user.role != "admin":
+    if current_user.role not in ["admin", "store_handler"]:
+
         raise HTTPException(status_code=403, detail="Admin only")
 
     url = upload_image_to_cloudinary(file.file)
@@ -445,6 +498,8 @@ class InvoiceItem(BaseModel):
     gst_rate: float
     total: float
     sku: Optional[str] = None # Variant SKU or product SKU
+    is_service: int = 0        # ✅ ADD THIS
+
     variant_info: Optional[dict] = None # Added for variant details
     image_url: Optional[str] = None # Added for item image
 
@@ -478,6 +533,8 @@ class InvoiceCreate(BaseModel):
     gst_amount: float = 0
     discount: float = 0
     payment_status: str = "pending"
+    additional_amount: float = 0  # ✅ ADD for manual charges
+    additional_label: Optional[str] = None  # ✅ ADD for charge label
 
 
 class DashboardStats(BaseModel):
@@ -519,6 +576,26 @@ class MaterialOutwardBySkuRequest(BaseModel):
     quantity: int
     reason: str
 
+class RequirementItem(BaseModel):
+    text: str
+    image_url: Optional[str] = None
+
+class RequirementCreate(BaseModel):
+    customer_name: str
+    customer_phone: str
+    requirement_items: List[RequirementItem]
+    priority: str = "normal"
+
+class RequirementResponse(BaseModel):
+    id: str
+    customer_name: str
+    customer_phone: str
+    requirement_items: List[RequirementItem]
+    priority: str
+    status: str
+    created_by: str
+    created_at: str
+          # ✅ ADD
 
 # ---------------- STATUS UPDATE SCHEMA ----------------
 class InvoiceStatusUpdate(BaseModel):
@@ -533,6 +610,7 @@ class InventoryTransactionResponse(BaseModel):
     type: str
     quantity: int
     variant_stock_after: Optional[int]  # ✅ ADD
+    created_by: str        # 👈 add this
 
     variant_sku: Optional[str]
     stock_after: int          # ✅ use this, not remaining_stock
@@ -649,7 +727,10 @@ def register(
         user=user
     )
 
-@api_router.post("/auth/login", response_model=Token)
+@api_router.post(
+    "/auth/login",
+    dependencies=[Depends(RateLimiter(times=10, seconds=60))]
+)
 def login(
     user_data: UserLogin,
     db: Session = Depends(get_db)
@@ -752,36 +833,281 @@ def upload_variant_image(
     file: UploadFile = File(...),
     current_user: UserModel = Depends(get_current_user)
 ):
-    if current_user.role != "admin":
-        raise HTTPException(403, "Admin only")
+    
 
     url = upload_image_to_cloudinary(file.file, folder="variant_images")
     return {"url": url}
+@api_router.post("/upload/requirement-image")
+def upload_requirement_image(
+    file: UploadFile = File(...),
+    current_user: UserModel = Depends(get_current_user)
+):
+    # 🔐 Allow admin & store handler
+    if current_user.role not in ["admin", "store_handler"]:
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    url = upload_image_to_cloudinary(
+        file.file,
+        folder="requirements"
+    )
+
+    return {"url": url}
+
+@api_router.delete("/requirements/cleanup")
+def cleanup_old_requirements(
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    cutoff_date = datetime.now(IST) - timedelta(days=90)
+
+    old_reqs = db.query(RequirementModel).filter(
+        RequirementModel.status.in_(["completed", "rejected"]),
+        RequirementModel.created_at < cutoff_date
+    ).all()
+
+    deleted_count = 0
+
+    for req in old_reqs:
+        # ================= DELETE ITEM IMAGES =================
+        try:
+            items = json.loads(req.requirement_items or "[]")
+        except Exception:
+            items = []
+
+        for item in items:
+            image_url = item.get("image_url")
+            if image_url:
+                try:
+                    # Extract public_id safely
+                    public_id = image_url.split("/")[-1].split(".")[0]
+                    cloudinary.uploader.destroy(
+                        f"requirements/{public_id}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Cloudinary delete failed for {image_url}: {e}"
+                    )
+
+        # ================= DELETE DB ROW =================
+        db.delete(req)
+        deleted_count += 1
+
+    db.commit()
+
+    return {
+        "message": "Old requirements cleaned successfully",
+        "deleted": deleted_count
+    }
+
+@api_router.post("/requirements", status_code=201)
+def create_requirement(
+    data: RequirementCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    requirement = RequirementModel(
+    customer_name=data.customer_name,
+    customer_phone=data.customer_phone,
+    requirement_items=json.dumps([
+    {
+        "text": item.text,
+        "image_url": item.image_url
+    }
+    for item in data.requirement_items
+]),    priority=data.priority,
+    status="pending",
+    created_by=current_user.id,
+    created_by_name=current_user.name,
+    created_at=datetime.now(IST),
+)
+
+
+    db.add(requirement)
+    db.commit()
+    db.refresh(requirement)
+
+    return {"message": "Requirement created successfully"}
+@api_router.get("/requirements")
+def list_requirements(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=5, le=50),
+    status: Optional[str] = Query("all"),
+    priority: Optional[str] = Query("all"),
+    search: Optional[str] = None,
+
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(RequirementModel)
+
+    # ---------- FILTERS ----------
+    if status != "all":
+        query = query.filter(RequirementModel.status == status)
+
+    if priority != "all":
+        query = query.filter(RequirementModel.priority == priority)
+
+    if search:
+        s = f"%{search.lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(RequirementModel.customer_name).like(s),
+                func.lower(RequirementModel.customer_phone).like(s),
+                func.lower(RequirementModel.created_by_name).like(s),
+            )
+        )
+
+    total = query.count()
+
+    rows = (
+        query
+        .order_by(RequirementModel.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+
+    data = []
+    for r in rows:
+        try:
+            items = json.loads(r.requirement_items or "[]")
+            if not isinstance(items, list):
+                items = []
+        except Exception:
+            items = []
+
+        data.append({
+            "id": r.id,
+            "customer_name": r.customer_name,
+            "customer_phone": r.customer_phone,
+            "requirement_items": items,
+            "priority": r.priority,
+            "status": r.status,
+            "created_by": r.created_by_name,
+            "created_at": r.created_at.isoformat(),
+        })
+
+    return {
+        "data": data,
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": math.ceil(total / limit)
+    }
+
+
+@api_router.post("/requirements/{requirement_id}/complete")
+def complete_requirement(
+    requirement_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    req = (
+        db.query(RequirementModel)
+        .filter(RequirementModel.id == requirement_id)
+        .first()
+    )
+    
+
+    if not req:
+        raise HTTPException(404, "Requirement not found")
+    if req.status in ["completed", "rejected"]:
+        raise HTTPException(400, "Requirement already finalized")
+    # ✅ Mark as completed only
+    req.status = "completed"
+    req.completed_at = datetime.now(IST)
+
+    db.commit()
+
+    return {
+        "message": "Requirement marked as completed",
+        "requirement_id": req.id,
+        "completed_at": req.completed_at.isoformat()
+    }
+
+@api_router.post("/requirements/{requirement_id}/reject")
+def reject_requirement(
+    requirement_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    req = db.query(RequirementModel).filter(
+        RequirementModel.id == requirement_id
+    ).first()
+    
+
+    if not req:
+        raise HTTPException(404, "Requirement not found")
+    if req.status in ["completed", "rejected"]:
+        raise HTTPException(400, "Requirement already finalized")
+    
+    req.status = "rejected"
+    req.completed_at = datetime.now(IST)   # ✅ ADD THIS
+
+    db.commit()
+
+    return {"message": "Requirement rejected"}
+
+@api_router.get("/products/recent-skus")
+def get_recent_skus(
+    limit: int = Query(2, ge=1, le=10),
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    rows = (
+        db.query(ProductModel.product_code)
+        .filter(ProductModel.is_active == 1)
+        .order_by(ProductModel.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "recent_skus": [r.product_code for r in rows]
+    }
 
 @api_router.get("/products")
 def get_products(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    category_id: Optional[str] = Query(None),
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     offset = (page - 1) * limit
 
-    base_query = db.query(ProductModel).filter(ProductModel.is_active == 1)
+    query = db.query(ProductModel).filter(ProductModel.is_active == 1)
 
-    total = base_query.count()
+    # 🔍 SEARCH FILTER (GLOBAL)
+    if search:
+        s = f"%{search.lower().strip()}%"
+        query = query.filter(
+            or_(
+                func.lower(ProductModel.name).like(s),
+                func.lower(ProductModel.sku).like(s),
+                func.lower(ProductModel.product_code).like(s),
+            )
+        )
+
+    # 📂 CATEGORY FILTER
+    if category_id and category_id != "all":
+        query = query.filter(ProductModel.category_id == category_id)
+
+    total = query.count()
 
     products = (
-    base_query
-    .order_by(ProductModel.created_at.desc())
-    .offset(offset)
-    .limit(limit)
-    .all()
-)
-
+        query
+        .order_by(ProductModel.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     result = []
-
     for p in products:
         item = {
             "id": p.id,
@@ -793,7 +1119,7 @@ def get_products(
             "category_name": p.category.name if p.category else None,
             "selling_price": p.selling_price,
             "min_selling_price": p.min_selling_price,
-            "stock": p.stock,                     # 🔒 READ-ONLY
+            "stock": p.stock,
             "min_stock": p.min_stock,
             "variants": p.variants or [],
             "images": safe_images(p.images),
@@ -814,6 +1140,92 @@ def get_products(
         "total": total,
         "total_pages": ceil(total / limit),
     }
+
+@api_router.get("/products/ageing")
+def product_ageing_report(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=50),
+    bucket: Optional[str] = Query(None, pattern="^(daily|weekly|monthly)$"),
+
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # ✅ USE NAIVE DATETIME (IMPORTANT)
+    now = datetime.now(IST).replace(tzinfo=None)
+
+    offset = (page - 1) * limit
+
+    base_products = (
+        db.query(ProductModel)
+        .filter(
+            ProductModel.is_active == 1,
+            ProductModel.is_service == 0
+        )
+        .order_by(ProductModel.created_at.asc())
+        .all()
+    )
+
+    def get_bucket(days: int) -> str:
+        if days <= 30:
+            return "latest"
+        elif days <= 45:
+            return "new"
+        elif days <= 60:
+            return "medium"
+        elif days <= 90:
+            return "old"
+        elif days <= 150:
+            return "very_old"
+        else:
+            return "dead_stock"
+
+    enriched = []
+
+    for p in base_products:
+        # 🔹 FIRST INWARD DATE
+        first_inward = (
+            db.query(func.min(InventoryTransaction.created_at))
+            .filter(
+                InventoryTransaction.product_id == p.id,
+                InventoryTransaction.type == "IN"
+            )
+            .scalar()
+        )
+
+        # ✅ NORMALIZE TO NAIVE
+        base_date = first_inward or p.created_at
+        if base_date.tzinfo is not None:
+            base_date = base_date.replace(tzinfo=None)
+
+        age_days = (now - base_date).days
+        age_bucket = get_bucket(age_days)
+
+        if bucket and age_bucket != bucket:
+            continue
+
+        enriched.append({
+            "product_code": p.product_code,
+            "sku": p.sku,
+            "name": p.name,
+            "qty": p.stock,
+            "age_bucket": age_bucket,
+            "first_inward_date": (
+                first_inward.isoformat() if first_inward else None
+            ),
+            "age_days": age_days
+        })
+
+    total = len(enriched)
+    paginated = enriched[offset : offset + limit]
+
+    return {
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": math.ceil(total / limit),
+        "data": paginated
+    }
+
 @api_router.get("/inventory/lookup/{code}")
 def inventory_lookup(
     code: str,
@@ -880,8 +1292,11 @@ def safe_commit(db: Session, retries: int = 3):
                 time.sleep(0.2)  # small backoff
             else:
                 raise
+@api_router.post(
+    "/inventory/material-inward/sku",
+    dependencies=[Depends(RateLimiter(times=30, seconds=60))]
+)
 
-@api_router.post("/inventory/material-inward/sku")
 def material_inward_by_sku(
     request: MaterialInwardBySkuRequest,
     current_user: UserModel = Depends(get_current_user),
@@ -939,18 +1354,22 @@ def material_inward_by_sku(
         stock_after = product.stock
 
     db.add(InventoryTransaction(
-        id=str(uuid.uuid4()),
-        product_id=product.id,
-        type="IN",
-        quantity=request.quantity,
-        source="MATERIAL_INWARD",
-        stock_before=stock_before,
-        stock_after=stock_after,
-        variant_sku=variant_sku,
-        variant_stock_after=variant_stock_after,
-        created_by=current_user.id,
-        created_at=datetime.now(IST)
-    ))
+    id=str(uuid.uuid4()),
+    product_id=product.id,
+    type="IN",
+    quantity=request.quantity,
+    source="MATERIAL_INWARD",
+
+    stock_before=stock_before,
+    stock_after=stock_after,
+    variant_sku=variant_sku,
+    variant_stock_after=variant_stock_after,
+
+    created_by=current_user.id,
+    created_by_name=current_user.name,   # ✅ ADD THIS
+    created_at=datetime.now(IST)
+))
+
 
     safe_commit(db)
 
@@ -960,7 +1379,11 @@ def material_inward_by_sku(
         "stock_after": stock_after,
         "variant_stock_after": variant_stock_after
     }
-@api_router.post("/inventory/material-outward/sku")
+
+@api_router.post(
+    "/inventory/material-outward/sku",
+    dependencies=[Depends(RateLimiter(times=30, seconds=60))]
+)
 def material_outward_by_sku(
     request: MaterialOutwardBySkuRequest,
     current_user: UserModel = Depends(get_current_user),
@@ -1048,8 +1471,11 @@ def material_outward_by_sku(
             stock_before=stock_before,
             stock_after=stock_after,
             variant_sku=variant_sku,
+
             variant_stock_after=variant_stock_after,
             created_by=current_user.id,
+            created_by_name=current_user.name,   # ✅ ADD
+
             created_at=datetime.now(IST),
         )
     )
@@ -1098,7 +1524,9 @@ def get_inventory_transactions(
                 "variant_sku": txn.variant_sku,
                 "variant_stock_after": txn.variant_stock_after,
                 "stock_after": txn.stock_after,
-                "created_at": txn.created_at.isoformat()
+                "created_at": txn.created_at.isoformat(),
+                "created_by": txn.created_by_name,   # ✅ ADD
+
             }
             for txn, prod in rows
         ],
@@ -1112,9 +1540,9 @@ def create_product(
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    # 🔐 ADMIN ONLY
+    # 🔐 NON-ADMIN → FORCE COST PRICE = 0
     if current_user.role != "admin":
-        raise HTTPException(403, "Admin only")
+        product_data.cost_price = 0
 
     # 🔍 VALIDATIONS
     if product_data.selling_price < product_data.min_selling_price:
@@ -1143,23 +1571,24 @@ def create_product(
     # ==========================================================
     if existing:
         if existing.is_active == 0:
-            # ❌ STOCK MUST REMAIN UNCHANGED
-            # ❌ INVENTORY HISTORY MUST REMAIN
-
             existing.is_active = 1
             existing.name = product_data.name
             existing.description = product_data.description
             existing.category_id = product_data.category_id
-            existing.cost_price = product_data.cost_price
             existing.selling_price = product_data.selling_price
             existing.min_selling_price = product_data.min_selling_price
             existing.images = product_data.images
             existing.is_service = product_data.is_service
             existing.min_stock = product_data.min_stock if not product_data.is_service else 0
 
+            # ✅ COST PRICE → ADMIN ONLY
+            if current_user.role == "admin":
+                existing.cost_price = product_data.cost_price
+
             # 🔒 ERP RULE: NO STOCK DURING RESTORE
             if product_data.is_service == 1:
                 existing.variants = []
+                existing.stock = 0
             else:
                 restored_variants = []
                 for v in product_data.variants or []:
@@ -1177,7 +1606,7 @@ def create_product(
                     restored_variants.append(vd)
 
                 existing.variants = restored_variants
-                existing.stock = 0  # 🔒 ALWAYS ZERO ON RESTORE
+                existing.stock = 0
 
             db.commit()
             db.refresh(existing)
@@ -1191,7 +1620,6 @@ def create_product(
     # ==========================================================
     product_code = generate_product_code(db)
 
-    # ❌ NO STOCK AT CREATION
     if product_data.is_service == 1:
         variants = []
         min_stock = 0
@@ -1199,7 +1627,7 @@ def create_product(
         variants = []
         for v in product_data.variants or []:
             vd = v.dict()
-            vd["stock"] = 0  # 🔒 FORCE ZERO
+            vd["stock"] = 0
             variants.append(vd)
         min_stock = product_data.min_stock
 
@@ -1232,10 +1660,10 @@ def create_product(
         name=product_data.name,
         description=product_data.description,
         category_id=product_data.category_id,
-        cost_price=product_data.cost_price,
+        cost_price=product_data.cost_price,  # already 0 for non-admin
         selling_price=product_data.selling_price,
         min_selling_price=product_data.min_selling_price,
-        stock=0,                 # 🔒 ALWAYS ZERO
+        stock=0,
         min_stock=min_stock,
         variants=enriched_variants,
         images=product_data.images,
@@ -1263,14 +1691,17 @@ def update_product(
     if not product:
         raise HTTPException(404, "Product not found")
 
-    if current_user.role != "admin":
-        raise HTTPException(403, "Admin only")
+    if current_user.role not in ["admin", "store_handler"]:
+        raise HTTPException(403, "Not allowed")
+
 
     if len(product_data.images) > 5:
         raise HTTPException(400, "Maximum 5 images allowed")
 
     if product_data.selling_price < product_data.min_selling_price:
         raise HTTPException(400, "Selling price cannot be below minimum selling price")
+    if current_user.role == "admin":
+        product.cost_price = product_data.cost_price
 
     product.name = product_data.name
     product.description = product_data.description
@@ -1280,7 +1711,6 @@ def update_product(
     product.min_selling_price = product_data.min_selling_price
     product.images = product_data.images
     product.is_service = product_data.is_service
-    product.cost_price = product_data.cost_price
     product.min_stock = product_data.min_stock
 
     # ================= STRICT ERP RULE =================
@@ -1531,6 +1961,8 @@ def get_invoices(
                 "customer_address": inv.customer_address,
                 "items": parse_invoice_items(inv.items),
                 "subtotal": inv.subtotal,
+                "additional_amount": inv.additional_amount,  # ✅ INCLUDE ADDITIONAL AMOUNT
+                "additional_label": inv.additional_label,  # ✅ INCLUDE LABEL
                 "gst_amount": inv.gst_amount,
                 "gst_enabled": bool(inv.gst_enabled),
                 "gst_rate": inv.gst_rate,
@@ -1539,6 +1971,8 @@ def get_invoices(
                 "total": inv.total,
                 "payment_status": inv.payment_status,
                 "created_at": inv.created_at.isoformat(),
+                "created_by": inv.created_by_name,   # ✅ ADD
+
             }
             for inv in invoices
         ],
@@ -1549,8 +1983,10 @@ def get_invoices(
             "total_pages": math.ceil(total / limit)
         }
     }
-
-@api_router.post("/invoices", status_code=201)
+@api_router.post(
+    "/invoices",
+    dependencies=[Depends(RateLimiter(times=20, seconds=60))]
+)
 def create_invoice(
     invoice_data: InvoiceCreate,
     current_user: UserModel = Depends(get_current_user),
@@ -1584,9 +2020,37 @@ def create_invoice(
 
     # ================= ITEMS =================
     invoice_items = []
-    subtotal = 0
+    subtotal = 0.0
+    
+    # ================= ADDITIONAL AMOUNT (MANUAL CHARGE) =================
+    additional_amount = float(invoice_data.additional_amount or 0)
 
     for item in invoice_data.items:
+
+        # =====================================================
+        # 🟢 SERVICE / ADDITIONAL CHARGE (NO INVENTORY)
+        # =====================================================
+        if item.is_service == 1 or not item.product_id or item.product_id == "SERVICE":
+            line_total = float(item.price) * int(item.quantity)
+            subtotal += line_total
+
+            invoice_items.append({
+                "product_id": None,
+                "sku": item.sku or "SERVICE",
+                "product_name": item.product_name,
+                "quantity": int(item.quantity),
+                "gst_rate": float(item.gst_rate),
+                "price": float(item.price),
+                "total": line_total,
+                "is_service": 1,
+                "variant_info": None,
+                "image_url": None,
+            })
+            continue
+
+        # =====================================================
+        # 🔵 NORMAL PRODUCT
+        # =====================================================
         product = (
             db.query(ProductModel)
             .filter(ProductModel.id == item.product_id)
@@ -1595,65 +2059,61 @@ def create_invoice(
         )
 
         if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
+            raise HTTPException(404, "Product not found")
 
-        # ✅ ARCHIVED PRODUCT CHECK (CORRECT PLACE)
         if product.is_active == 0:
             raise HTTPException(
                 status_code=400,
                 detail=f"Product '{product.name}' is archived and cannot be sold",
             )
 
-        price = product.selling_price
-        quantity = item.quantity
+        price = float(item.price)
+        quantity = int(item.quantity)
         line_total = price * quantity
         subtotal += line_total
 
-        # ================= SERVICE (NO INVENTORY) =================
+        # ================= DB SERVICE PRODUCT =================
         if product.is_service == 1:
             invoice_items.append({
                 "product_id": product.id,
                 "sku": item.sku or product.sku,
                 "product_name": product.name,
                 "quantity": quantity,
-                "gst_rate": item.gst_rate,
-
+                "gst_rate": float(item.gst_rate),
                 "price": price,
                 "total": line_total,
+                "is_service": 1,
+                "variant_info": None,
+                "image_url": None,
             })
             continue
 
         # ================= INVENTORY =================
         variants = list(product.variants or [])
+        variant_details = None
 
-        # =========================================================
-        # 🔹 PRODUCT WITH VARIANTS
-        # =========================================================
+        # ---------- PRODUCT WITH VARIANTS ----------
         if variants:
             if not item.sku:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Product {product.name} has variants. Variant SKU required.",
+                    400,
+                    f"Product {product.name} has variants. Variant SKU required."
                 )
 
             total_before = calculate_total_stock(variants)
-            variant_found = False
             variant_stock_after = None
-            variant_details = None
 
             for v in variants:
                 if v.get("v_sku") == item.sku:
                     current_stock = int(v.get("stock", 0))
-
                     if current_stock < quantity:
                         raise HTTPException(
-                            status_code=400,
-                            detail=f"Insufficient stock for variant {item.sku}. Available: {current_stock}",
+                            400,
+                            f"Insufficient stock for variant {item.sku}. Available: {current_stock}",
                         )
 
                     v["stock"] = current_stock - quantity
                     variant_stock_after = v["stock"]
-                    variant_found = True
 
                     variant_details = {
                         "v_sku": v.get("v_sku"),
@@ -1663,18 +2123,11 @@ def create_invoice(
                         "v_image_url": v.get("image_url"),
                     }
                     break
-
-            if not variant_found:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Variant SKU {item.sku} not found",
-                )
-
-            derived_stock = calculate_total_stock(variants)
+            else:
+                raise HTTPException(400, f"Variant SKU {item.sku} not found")
 
             product.variants = variants
-            product.stock = derived_stock
-
+            product.stock = calculate_total_stock(variants)
             flag_modified(product, "variants")
             flag_modified(product, "stock")
             db.flush()
@@ -1688,24 +2141,22 @@ def create_invoice(
                     source="INVOICE",
                     reason="Invoice",
                     stock_before=total_before,
-                    stock_after=derived_stock,
+                    stock_after=product.stock,
                     variant_sku=item.sku,
                     variant_stock_after=variant_stock_after,
                     created_by=current_user.id,
+                    created_by_name=current_user.name,
                     created_at=datetime.now(IST),
                 )
             )
 
-        # =========================================================
-        # 🔹 PRODUCT WITHOUT VARIANTS
-        # =========================================================
+        # ---------- PRODUCT WITHOUT VARIANTS ----------
         else:
             stock_before = int(product.stock or 0)
-
             if stock_before < quantity:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient stock for {product.name}. Available: {stock_before}",
+                    400,
+                    f"Insufficient stock for {product.name}. Available: {stock_before}",
                 )
 
             product.stock = stock_before - quantity
@@ -1722,14 +2173,11 @@ def create_invoice(
                     reason="Invoice",
                     stock_before=stock_before,
                     stock_after=product.stock,
-                    variant_sku=None,
-                    variant_stock_after=None,
                     created_by=current_user.id,
+                    created_by_name=current_user.name,
                     created_at=datetime.now(IST),
                 )
             )
-
-            variant_details = None
 
         invoice_items.append({
             "product_id": product.id,
@@ -1742,45 +2190,46 @@ def create_invoice(
                 else (product.images[0] if product.images else None)
             ),
             "quantity": quantity,
-            "gst_rate": item.gst_rate,
-
+            "gst_rate": float(item.gst_rate),
             "price": price,
             "total": line_total,
+            "is_service": 0,
         })
 
-    # ================= INVOICE === ==============
-    if invoice_data.gst_enabled:
-        gst_amount = round(
-        (subtotal * invoice_data.gst_rate) / 100,
-        2
+    # ================= TOTALS =================
+    # Add additional amount to subtotal before GST calculation
+    taxable_subtotal = subtotal + additional_amount
+    
+    gst_amount = (
+        round((taxable_subtotal * invoice_data.gst_rate) / 100, 2)
+        if invoice_data.gst_enabled
+        else 0
     )
-    else:
-      gst_amount = 0
 
-
-    total = subtotal + gst_amount - invoice_data.discount
+    total = round(taxable_subtotal + gst_amount - invoice_data.discount, 2)
     invoice_number = generate_invoice_number(db)
 
     invoice = InvoiceModel(
-    id=str(uuid.uuid4()),
-    invoice_number=invoice_number,
-    customer_id=customer.id,
-    customer_name=customer.name,
-    customer_phone=customer.phone,
-    customer_address=customer.address,
-    items=json.dumps(invoice_items),
-
-    subtotal=subtotal,
-    gst_amount=gst_amount,
-    gst_rate=invoice_data.gst_rate,
-    gst_enabled=1 if invoice_data.gst_enabled else 0,
-
-    discount=invoice_data.discount,
-    total=total,
-    payment_status=invoice_data.payment_status,
-    created_at=datetime.now(IST),
-)
-
+        id=str(uuid.uuid4()),
+        invoice_number=invoice_number,
+        customer_id=customer.id,
+        customer_name=customer.name,
+        customer_phone=customer.phone,
+        customer_address=customer.address,
+        items=json.dumps(invoice_items),
+        subtotal=subtotal,
+        additional_amount=additional_amount,  # ✅ STORE ADDITIONAL AMOUNT
+        additional_label=invoice_data.additional_label,  # ✅ STORE LABEL
+        gst_amount=gst_amount,
+        gst_rate=invoice_data.gst_rate,
+        gst_enabled=1 if invoice_data.gst_enabled else 0,
+        discount=invoice_data.discount,
+        total=total,
+        payment_status=invoice_data.payment_status,
+        created_by=current_user.id,
+        created_by_name=current_user.name,
+        created_at=datetime.now(IST),
+    )
 
     db.add(invoice)
     db.commit()
@@ -1792,7 +2241,6 @@ def create_invoice(
         "total": invoice.total,
         "created_at": invoice.created_at,
     }
-
 
 @api_router.get(
     "/customers/search",
@@ -1850,7 +2298,10 @@ def list_products(
         for prod in products
     ]
 
-@api_router.get("/products/search")
+@api_router.get(
+    "/products/search",
+    dependencies=[Depends(RateLimiter(times=100, seconds=60))]
+)
 def search_products(
     q: str,
     current_user: UserModel = Depends(get_current_user),
@@ -1907,7 +2358,10 @@ def update_invoice_status(
 # This is a workaround for potential ordering issues if not explicitly handled.
 
         
-@api_router.get("/dashboard")
+@api_router.get(
+    "/dashboard",
+    dependencies=[Depends(RateLimiter(times=30, seconds=60))]
+)
 def get_dashboard_stats(
     filter: str = "today",
     year: int | None = None,
@@ -2129,10 +2583,11 @@ def dashboard_activity(
 
     for txn, prod in inventory:
         activity.append({
-            "type": "inventory",
-            "text": f"{txn.type} – {prod.name} ({txn.quantity})",
-            "date": txn.created_at.isoformat()
-        })
+        "type": "inventory",
+        "text": f"{txn.type} – {prod.name} ({txn.quantity}) by {txn.created_by_name}",
+        "date": txn.created_at.isoformat()
+    })
+
 
     return sorted(activity, key=lambda x: x["date"], reverse=True)[:limit]
 
@@ -2249,6 +2704,7 @@ def upload_qr_to_cloudinary(pil_image, folder="qr"):
         resource_type="image"
     )
     return result["secure_url"]
+
 @api_router.get("/products/sku/{code}")
 def get_product_by_sku(
     code: str,
@@ -2316,11 +2772,14 @@ def get_product_by_sku(
     }
 
 app.include_router(api_router)
-
+ALLOWED_ORIGINS = [
+    "https://rridegarage.com",
+    "https://www.rridegarage.com",
+]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=[
         "Authorization",
@@ -2328,10 +2787,3 @@ app.add_middleware(
         "Accept"
     ],
 )
-
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)

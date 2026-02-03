@@ -381,6 +381,8 @@ useEffect(() => {
                     <th>V-SKU</th>
                     <th>Qty</th>
                     <th>Stock After</th>
+                      <th>By</th> {/* 👈 ADD THIS */}
+
                   </tr>
                 </thead>
 
@@ -406,7 +408,9 @@ useEffect(() => {
     ? t.variant_stock_after ?? "—"
     : t.stock_after}
 </td>
-
+<td className="text-sm font-medium">
+  {t.created_by || "—"}   {/* 👈 USER NAME */}
+</td>
                     </tr>
                   ))}
                 </tbody>
