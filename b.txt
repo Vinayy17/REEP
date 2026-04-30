@@ -1,0 +1,3632 @@
+"use client"
+
+    import { useEffect, useState, useRef } from "react"
+    import axios from "axios"
+    import { Button } from "@/components/ui/button"
+    import { Input } from "@/components/ui/input"
+    import { Label } from "@/components/ui/label"
+    import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+    import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+    import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+    import { toast } from "sonner"
+    import { Plus, Trash2, Search, Download, Eye, FileText, ScanLine, Loader2, Camera, X, Share2 } from "lucide-react"
+    import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode"
+    import { useLocation } from "react-router-dom"
+
+    const API = `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
+
+    const formatCurrency = (amount, decimals = 2) => {
+      const num = typeof amount === "number" ? amount : Number(amount)
+      return isNaN(num) ? "0.00" : num.toFixed(decimals)
+    }
+
+    const formatNumber = (amount, decimals = 0) => {
+      const num = typeof amount === "number" ? amount : Number(amount)
+      return isNaN(num) ? "0" : num.toFixed(decimals)
+    }
+
+    export default function Invoice() {
+
+      const [activeTab, setActiveTab] = useState("create")
+      
+const resultRefs = useRef([])
+      const [invoices, setInvoices] = useState([])
+      const [products, setProducts] = useState([])
+      const [open, setOpen] = useState(false)
+      const [viewInvoice, setViewInvoice] = useState(null)
+      const [loading, setLoading] = useState(false)
+      const [searchTerm, setSearchTerm] = useState("")
+      const [page, setPage] = useState(1)
+      const [statusFilter, setStatusFilter] = useState("all")  // Default to all
+      const [rangeFilter, setRangeFilter] = useState("last30")
+      const [monthFilter, setMonthFilter] = useState(null)
+      const [limit, setLimit] = useState(10)
+      const [pagination, setPagination] = useState({ page: 1, total_pages: 1 })
+      const [discount, setDiscount] = useState(0)
+      const [paymentStatus, setPaymentStatus] = useState("") 
+      const [paidAmount, setPaidAmount] = useState(0)
+       // Empty = required selection
+
+const [drafts, setDrafts] = useState([])
+const [paymentMode, setPaymentMode] = useState("cash")
+      const [productSearch, setProductSearch] = useState("")
+      const [searchResults, setSearchResults] = useState([])
+      const [showProductSearch, setShowProductSearch] = useState(false)
+      const [selectedProduct, setSelectedProduct] = useState(null)
+      const [showVariantDialog, setShowVariantDialog] = useState(false)
+      const [creatingInvoice, setCreatingInvoice] = useState(false)
+      const [selectedVariantIndex, setSelectedVariantIndex] = useState(0)
+const [gstEnabled, setGstEnabled] = useState(false)
+    const [gstRate, setGstRate] = useState(18)
+    const INVOICE_STORAGE_KEY = "invoice_draft_state"
+    const draftToastLock = useRef(false)
+const [showManualDialog, setShowManualDialog] = useState(false)
+const [manualItem, setManualItem] = useState({
+  name: "",
+  price: "",
+  quantity: 1
+})
+
+      // Customer fields
+      const [customerPhone, setCustomerPhone] = useState("")
+      const [customerName, setCustomerName] = useState("")
+      const [customerEmail, setCustomerEmail] = useState("")
+      const [customerAddress, setCustomerAddress] = useState("")
+      const [customerId, setCustomerId] = useState(null)
+const [draftId, setDraftId] = useState(null)
+const [isDraft, setIsDraft] = useState(false)
+  const location = useLocation() // ✅ ADD THIS LINE
+
+      // Invoice fields
+      const [lineItems, setLineItems] = useState([])
+      const [skuInput, setSkuInput] = useState("")
+      const [isScanning, setIsScanning] = useState(false)
+      const [showCamera, setShowCamera] = useState(false)
+      const [cameraLoading, setCameraLoading] = useState(false)
+      const [lastScannedSku, setLastScannedSku] = useState(null)
+      const [lastScanTime, setLastScanTime] = useState(0)
+      const scannerRef = useRef(null)
+      const scanLockRef = useRef(false)
+      const [scanMode, setScanMode] = useState(null) // "camera" | "barcode"
+      const skuInputRef = useRef(null)
+
+      const scanTimeoutRef = useRef(null)
+      // const [manualAmount, setManualAmount] = useState(0)
+      // const [manualLabel, setManualLabel] = useState("Additional Charge")
+
+      const [productSearchQuery, setProductSearchQuery] = useState("")
+      const [productSearchResults, setProductSearchResults] = useState([])
+      const [isSearchingProducts, setIsSearchingProducts] = useState(false)
+      const searchTimeoutRef = useRef(null)
+      const [selectedProductForVariant, setSelectedProductForVariant] = useState(null)
+      const [selectedSearchIndex, setSelectedSearchIndex] = useState(-1)
+const [additionalCharges, setAdditionalCharges] = useState([
+  { label: "", amount: "" }
+])
+
+// ✅ NEW: Payment Modal States
+const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false)
+const [paymentHistory, setPaymentHistory] = useState([])
+const [paymentAmount, setPaymentAmount] = useState("")
+const [paymentModeSelected, setPaymentModeSelected] = useState("cash")
+const [paymentReference, setPaymentReference] = useState("")
+const [loadingPayments, setLoadingPayments] = useState(false)
+
+// ✅ NEW: Payment Mode Dialog (for marking as paid)
+const [isPaidModeDialogOpen, setIsPaidModeDialogOpen] = useState(false)
+const [paidPaymentMode, setPaidPaymentMode] = useState("cash")
+const [paidPaymentRef, setPaidPaymentRef] = useState("")
+const [pendingPaidInvoiceId, setPendingPaidInvoiceId] = useState(null)
+
+      const { subtotal, gstAmount, total } = calculateTotals()
+
+const addAdditionalCharge = () => {
+  setAdditionalCharges([...additionalCharges, { label: "", amount: "" }])
+}
+
+const removeAdditionalCharge = (index) => {
+  const updated = [...additionalCharges]
+  updated.splice(index, 1)
+  setAdditionalCharges(updated)
+}
+
+const updateAdditionalCharge = (index, field, value) => {
+  const updated = [...additionalCharges]
+  updated[index][field] = value
+  setAdditionalCharges(updated)
+}
+const additionalTotal = additionalCharges
+  .filter(c => c.label || c.amount)
+  .reduce((sum, c) => sum + Number(c.amount || 0), 0)
+
+// ✅ NEW: Load Draft Function - Keeps payment status from draft
+// const loadDraft = (draftData) => {
+//   setDraftId(draftData.id)
+//   setCustomerId(draftData.customer_id)
+//   setCustomerName(draftData.customer_name)
+//   setCustomerPhone(draftData.customer_phone)
+//   setCustomerEmail(draftData.customer_email || "")
+//   setCustomerAddress(draftData.customer_address || "")
+  
+//   setLineItems(draftData.items || [])
+//   setGstEnabled(draftData.gst_enabled || false)
+//   setGstRate(draftData.gst_rate || 0)
+//   setDiscount(draftData.discount || 0)
+//   setAdditionalCharges(draftData.additional_charges || [{ label: "", amount: "" }])
+  
+//   // Keep payment status from draft (don't reset to 'pending')
+//   const draftPaymentStatus = draftData.payment_status || "pending"
+//   setPaymentStatus(draftPaymentStatus)
+//   setPaymentMode(draftData.payment_mode || "cash")
+  
+//   // If partial, keep paid amount
+//   if (draftPaymentStatus === "partial" && draftData.paid_amount) {
+//     setPaidAmount(draftData.paid_amount)
+//   } else {
+//     setPaidAmount(0)
+//   }
+  
+//   setActiveTab("create")
+//   toast.success("Draft loaded successfully")
+// }
+
+const addManualItemToInvoice = () => {
+  if (!manualItem.name || !manualItem.price) {
+    toast.error("Item name and price required")
+    return
+  }
+
+  const qty = Number(manualItem.quantity || 1)
+  const price = Number(manualItem.price || 0)
+
+  const newItem = {
+    product_id: null,
+    sku: "MANUAL",
+    product_name: manualItem.name,
+    quantity: qty,
+    price: price,
+    gst_rate: gstEnabled ? Number(gstRate) : 0,
+    total: qty * price,
+    is_service: 1,
+    image_url: "/placeholder.png",
+    variant_info: null,
+  }
+
+  setLineItems((prev) => [...prev, newItem])
+
+  setManualItem({
+    name: "",
+    price: "",
+    quantity: 1
+  })
+
+  setShowManualDialog(false)
+  toast.success("Manual item added")
+}
+function calculateTotals() {
+
+  const safeItems = Array.isArray(lineItems) ? lineItems : []
+
+  const itemsSubtotal = safeItems.reduce(
+    (sum, item) => sum + Number(item.total || 0),
+    0
+  )
+
+  const extraAmount = additionalCharges.reduce(
+    (sum, c) => sum + Number(c.amount || 0),
+    0
+  )
+
+  const taxableAmount = itemsSubtotal + extraAmount
+
+  const gstAmount = gstEnabled
+    ? (taxableAmount * Number(gstRate || 0)) / 100
+    : 0
+
+  const total = taxableAmount - Number(discount || 0) + gstAmount
+
+  return {
+    subtotal: taxableAmount,
+    gstAmount,
+    total,
+  }
+}
+const handleCreateInvoice = async () => {
+
+  // 🚫 Prevent double click
+  if (creatingInvoice) return
+
+  // ✅ VALIDATIONS FIRST
+  if (!customerName || !customerPhone || lineItems.length === 0) {
+    toast.error("Customer name, phone number and items required")
+    return
+  }
+
+  if (!paymentStatus) {
+    toast.error("Payment status (Pending/Paid) is required")
+    return
+  }
+
+  if (!paymentMode) {
+    toast.error("Payment mode required")
+    return
+  }
+  if (paymentStatus === "partial") {
+
+  if (!paidAmount || paidAmount <= 0) {
+    toast.error("Enter paid amount for partial payment")
+    return
+  }
+
+  if (paidAmount > total) {
+    toast.error("Paid amount cannot exceed total")
+    return
+  }
+
+}
+
+  // ✅ CLEAN ITEMS
+  const cleanedItems = lineItems
+    .filter((item) => item && item.product_name && Number(item.quantity) > 0)
+    .map((item) => ({
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: Number(item.quantity),
+      price: Number(item.price),
+      gst_rate: gstEnabled ? Number(gstRate) : 0,
+      total: Number(item.total),
+
+      sku: item.v_sku || item.sku,
+      is_service: item.is_service || 0,
+      variant_info: item.variant_info || null,
+
+      image_url: item.image_url || null
+    }))
+
+  if (cleanedItems.length === 0) {
+    toast.error("Add at least one valid item")
+    return
+  }
+
+  // ✅ START LOADING
+  setCreatingInvoice(true)
+
+  try {
+
+    let currentDraftId = draftId
+
+    // 🔹 CREATE DRAFT IF NOT EXISTS
+    if (!currentDraftId) {
+
+      const draftRes = await axios.post(`${API}/invoices/draft`, {
+        customer_id: customerId,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        customer_email: customerEmail,
+        customer_address: customerAddress,
+
+        items: cleanedItems,
+
+        gst_enabled: gstEnabled,
+        gst_rate: gstEnabled ? Number(gstRate) : 0,
+        discount: Number(discount),
+        additional_charges: additionalCharges
+      })
+
+      currentDraftId = draftRes.data.id
+    }
+
+    // 🔹 UPDATE DRAFT BEFORE FINALIZE
+    await axios.put(`${API}/invoices/draft/${currentDraftId}`, {
+      customer_id: customerId,
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      customer_email: customerEmail,
+      customer_address: customerAddress,
+
+      items: cleanedItems,
+
+      gst_enabled: gstEnabled,
+      gst_rate: gstEnabled ? Number(gstRate) : 0,
+      discount: Number(discount),
+      additional_charges: additionalCharges
+    })
+
+    // 🔹 FINALIZE
+   await axios.post(
+  `${API}/invoices/draft/${currentDraftId}/finalize`,
+  {
+    payment_status: paymentStatus,
+    paid_amount: paymentStatus === "partial" ? paidAmount : undefined
+  },
+  {
+    params: {
+      payment_mode: paymentMode
+    }
+  }
+)
+
+    toast.success("Invoice finalized successfully")
+
+    // 🔹 RESET
+    resetForm()
+    fetchInvoices()
+    setActiveTab("list")
+
+  } catch (err) {
+    console.error("Invoice finalize error:", err)
+
+    toast.error(
+      err?.response?.data?.detail ||
+      err?.message ||
+      "Failed to finalize invoice"
+    )
+
+  } finally {
+    setCreatingInvoice(false)
+  }
+}
+      useEffect(() => {
+        const token = localStorage.getItem("token")
+        if (token) {
+          axios.defaults.headers.common["Authorization"] = `Bearer ${token}`
+        }
+
+        fetchProducts()
+      }, [])
+
+      useEffect(() => {
+        fetchInvoices()
+      }, [page, statusFilter, rangeFilter, monthFilter])
+
+      // ❌ DISABLED AUTO-SAVE - DO NOT AUTO-SAVE EVERY 10 SECONDS
+      useEffect(() => {
+        if (activeTab === "create" && scanMode === "barcode") {
+          setTimeout(() => skuInputRef.current?.focus(), 300)
+        }
+      }, [activeTab, scanMode])
+
+      useEffect(() => {
+        const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent)
+        if (isMobile) {
+          setScanMode("camera")
+          setShowCamera(true)
+        } else {
+          setScanMode("barcode")
+          setShowCamera(false)
+          setTimeout(() => skuInputRef.current?.focus(), 300)
+        }
+      }, [])
+useEffect(() => {
+  if (!showVariantDialog) return
+
+  const el = document.getElementById(`variant-${selectedVariantIndex}`)
+  if (el) {
+    el.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest"
+    })
+  }
+}, [selectedVariantIndex, showVariantDialog])
+
+     useEffect(() => {
+
+  const timeout = setTimeout(() => {
+
+    const invoiceState = {
+      customerPhone,
+      customerName,
+      customerEmail,
+      customerAddress,
+      customerId,
+
+      lineItems,
+      discount,
+      paymentStatus,
+      paymentMode,
+
+      gstEnabled,
+      gstRate,
+
+      additionalCharges,
+
+      draftId,
+      isDraft
+    }
+
+    localStorage.setItem(
+      INVOICE_STORAGE_KEY,
+      JSON.stringify(invoiceState)
+    )
+
+  }, 800)
+
+  return () => clearTimeout(timeout)
+
+}, [
+  customerPhone,
+  customerName,
+  customerEmail,
+  customerAddress,
+  customerId,
+  lineItems,
+  discount,
+  paymentStatus,
+  paymentMode,
+  gstEnabled,
+  gstRate,
+  additionalCharges,
+  draftId,
+  isDraft
+])
+
+// ❌ DISABLED - NO RECOVERY ALERT ON LOAD
+
+    useEffect(() => {
+  if (location.state?.customer) {
+    const c = location.state.customer
+
+    setCustomerId(c.id)
+    setCustomerName(c.name || "")
+    setCustomerPhone(c.phone || "")
+    setCustomerEmail(c.email || "")
+    setCustomerAddress(c.address || "")
+
+    setActiveTab("create")
+    toast.success("Customer details loaded")
+
+    // 🧹 IMPORTANT: clear navigation state
+    window.history.replaceState({}, document.title)
+  }
+}, [location.state])
+
+useEffect(() => {
+
+  if (paymentStatus === "paid") {
+    setPaidAmount(total)
+  }
+
+  else if (paymentStatus === "pending") {
+    setPaidAmount(0)
+  }
+
+  else if (paymentStatus === "partial") {
+    if (paidAmount === 0) {
+      setPaidAmount(total)
+    }
+  }
+
+}, [paymentStatus, total])
+
+useEffect(() => {
+  if (!isDraft && !draftId) return
+
+  const timer = setTimeout(() => {
+    autoSaveDraft()
+  }, 1200)
+
+  return () => clearTimeout(timer)
+
+},  [
+  lineItems,
+  additionalCharges,
+  discount,
+  gstEnabled,
+  gstRate,
+  customerName
+])
+
+useEffect(() => {
+  if (showVariantDialog) {
+    setSelectedVariantIndex(0)
+  }
+}, [showVariantDialog])
+
+const handleVariantKeyDown = (e) => {
+  const variants = selectedProductForVariant?.variants || []
+  if (!variants.length) return
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault()
+    setSelectedVariantIndex((prev) =>
+      prev < variants.length - 1 ? prev + 1 : prev
+    )
+  }
+
+  if (e.key === "ArrowUp") {
+    e.preventDefault()
+    setSelectedVariantIndex((prev) =>
+      prev > 0 ? prev - 1 : prev
+    )
+  }
+
+  if (e.key === "Enter") {
+    e.preventDefault()
+    const variant = variants[selectedVariantIndex]
+    if (variant) {
+      addSelectedProductToInvoice(selectedProductForVariant, variant)
+    }
+  }
+}
+      useEffect(() => {
+          setSelectedSearchIndex(-1)
+
+        if (productSearchQuery.length >= 2) {
+          if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+          searchTimeoutRef.current = setTimeout(() => {
+            handleProductSearch(productSearchQuery)
+          }, 300)
+        } else {
+          setProductSearchResults([])
+        }
+        return () => {
+          if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current)
+        }
+      }, [productSearchQuery])
+
+      useEffect(() => {
+  if (selectedSearchIndex >= 0 && resultRefs.current[selectedSearchIndex]) {
+    resultRefs.current[selectedSearchIndex].scrollIntoView({
+      behavior: "smooth",
+      block: "nearest"
+    })
+  }
+}, [selectedSearchIndex])
+
+      const handleProductSearchKeyDown = (e) => {
+        if (!productSearchResults.length) return
+
+        if (e.key === "ArrowDown") {
+          e.preventDefault()
+          setSelectedSearchIndex((prev) =>
+            prev < productSearchResults.length - 1 ? prev + 1 : prev
+          )
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault()
+          setSelectedSearchIndex((prev) => (prev > 0 ? prev - 1 : -1))
+        } else if (e.key === "Enter") {
+          e.preventDefault()
+          if (selectedSearchIndex >= 0) {
+            selectProduct(productSearchResults[selectedSearchIndex])
+            setSelectedSearchIndex(-1)
+          }
+        } else if (e.key === "Escape") {
+          setProductSearchResults([])
+          setSelectedSearchIndex(-1)
+        }
+      }
+
+
+  const handleDeleteDraft = async (idToDelete) => {
+  if (!idToDelete) return
+
+  const confirmDelete = window.confirm(
+    "Are you sure you want to delete this draft? This cannot be undone."
+  )
+  if (!confirmDelete) return
+
+  try {
+    await axios.delete(`${API}/invoices/draft/${idToDelete}`)
+
+    toast.success("Draft deleted")
+
+    // 🔄 Refresh draft list
+    fetchDrafts()
+
+    // 🧹 If currently opened draft was deleted → reset
+    if (draftId === idToDelete) {
+      resetForm()
+    }
+  } catch (err) {
+    console.error("Delete draft failed", err)
+    toast.error(err?.response?.data?.detail || "Failed to delete draft")
+  }
+}
+
+      const fetchInvoices = async () => {
+        try {
+          setLoading(true)
+
+          const res = await axios.get(`${API}/invoices`, {
+            params: {
+              page,
+              limit,
+              status: statusFilter === "all" ? undefined : statusFilter,
+              range: rangeFilter === "all" ? undefined : rangeFilter,
+              month: monthFilter || undefined,
+            },
+          })
+
+          const parsedInvoices = (res.data?.data || []).map((inv) => {
+            let items = []
+
+            try {
+              if (Array.isArray(inv.items)) {
+                items = inv.items
+              } else if (typeof inv.items === "string") {
+                items = JSON.parse(inv.items)
+              }
+            } catch (e) {
+              console.error("Item parse failed", e)
+              items = []
+            }
+
+            return {
+              ...inv,
+              items,
+              payment_status: inv.payment_status || "pending",
+            }
+          })
+
+          setInvoices(parsedInvoices)
+          setPagination(res.data.pagination)
+        } catch (err) {
+          console.error("Invoice fetch failed", err)
+          toast.error(err?.response?.data?.detail || "Failed to load invoices")
+        } finally {
+          setLoading(false)
+        }
+      }
+
+      const addPayment = async (invoice) => {
+        // Open modal instead of prompt
+        setViewInvoice(invoice)
+        setPaymentAmount("")
+        setPaymentModeSelected("cash")
+        setPaymentReference("")
+        setIsPaymentModalOpen(true)
+        
+        // Fetch payment history
+        await fetchPaymentHistory(invoice.id)
+      }
+
+      const fetchPaymentHistory = async (invoiceId) => {
+        try {
+          setLoadingPayments(true)
+          const res = await axios.get(`${API}/invoices/${invoiceId}/payments`)
+          setPaymentHistory(res.data || [])
+        } catch (err) {
+          console.error("Payment history fetch failed", err)
+          setPaymentHistory([])
+        } finally {
+          setLoadingPayments(false)
+        }
+      }
+
+      const handleAddPayment = async () => {
+        if (!paymentAmount || Number(paymentAmount) <= 0) {
+          toast.error("Enter a valid payment amount")
+          return
+        }
+
+        if (!paymentModeSelected) {
+          toast.error("Select a payment mode")
+          return
+        }
+
+        try {
+          const res = await axios.post(
+            `${API}/invoices/${viewInvoice.id}/add-payment`,
+            {
+              amount: Number(paymentAmount),
+              payment_mode: paymentModeSelected,
+              reference: paymentReference || null
+            }
+          )
+
+          toast.success("Payment recorded successfully")
+          
+          // Reset form
+          setPaymentAmount("")
+          setPaymentReference("")
+          setPaymentModeSelected("cash")
+          
+          // Refresh data
+          await fetchPaymentHistory(viewInvoice.id)
+          fetchInvoices()
+          
+          // Update view invoice
+          const updatedInvoice = {
+            ...viewInvoice,
+            paid_amount: res.data.paid_amount,
+            balance_amount: res.data.balance_amount,
+            payment_status: res.data.payment_status
+          }
+          setViewInvoice(updatedInvoice)
+        } catch (err) {
+          toast.error(err?.response?.data?.detail || "Failed to add payment")
+        }
+      }
+
+      const handleDeletePayment = async (paymentId) => {
+        if (!window.confirm("Delete this payment record?")) return
+
+        try {
+          const res = await axios.delete(`${API}/invoices/payment/${paymentId}`)
+          
+          toast.success("Payment deleted")
+          
+          // Refresh data
+          await fetchPaymentHistory(viewInvoice.id)
+          fetchInvoices()
+          
+          // Update view invoice
+          const updatedInvoice = {
+            ...viewInvoice,
+            paid_amount: res.data.paid_amount,
+            balance_amount: res.data.balance_amount,
+            payment_status: res.data.payment_status
+          }
+          setViewInvoice(updatedInvoice)
+        } catch (err) {
+          toast.error(err?.response?.data?.detail || "Failed to delete payment")
+        }
+      }
+
+      // ✅ NEW: Handle Mark as Paid (opens payment mode dialog first)
+      const handleMarkAsPaid = (invoiceId) => {
+        setPendingPaidInvoiceId(invoiceId)
+        setPaidPaymentMode("cash")
+        setPaidPaymentRef("")
+        setIsPaidModeDialogOpen(true)
+      }
+
+      // ✅ NEW: Confirm Mark as Paid with payment mode
+      const confirmMarkAsPaid = async () => {
+        if (!pendingPaidInvoiceId) return
+
+        try {
+          const res = await axios.patch(
+            `${API}/invoices/${pendingPaidInvoiceId}/status`,
+            null,
+            {
+              params: {
+                payment_status: "paid",
+                payment_mode: paidPaymentMode,
+                reference: paidPaymentRef || null
+              }
+            }
+          )
+
+          toast.success("Invoice marked as paid")
+          
+          // Refresh data
+          fetchInvoices()
+          
+          // Close dialog
+          setIsPaidModeDialogOpen(false)
+          setPendingPaidInvoiceId(null)
+          
+          // Update view invoice
+          const updatedInvoice = {
+            ...viewInvoice,
+            payment_status: "paid",
+            payment_mode: paidPaymentMode
+          }
+          setViewInvoice(updatedInvoice)
+        } catch (err) {
+          toast.error(err?.response?.data?.detail || "Failed to mark as paid")
+        }
+      }
+      const fetchProducts = async () => {
+        try {
+          const res = await axios.get(`${API}/products`)
+          setProducts(res.data)
+        } catch (err) {
+          console.error("Product fetch failed", err)
+          toast.error("Failed to load products")
+        }
+      }
+      const cleanedAdditionalCharges = additionalCharges.filter(
+  c => c.label?.trim() || Number(c.amount) > 0
+)
+const handleSaveDraft = async (silent = false) => {
+
+  if (lineItems.length === 0) return
+
+  if (creatingInvoice) return
+
+  if (!customerName) {
+    if (!silent) toast.error("Customer name required")
+    return
+  }
+
+  try {
+
+    const payload = {
+      customer_id: customerId,
+      customer_name: customerName,
+      customer_phone: customerPhone,
+      customer_email: customerEmail,
+      customer_address: customerAddress,
+
+      items: lineItems.map((item) => ({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: Number(item.quantity),
+        price: Number(item.price),
+        gst_rate: gstEnabled ? Number(gstRate) : 0,
+        total: Number(item.total),
+
+        sku: item.v_sku || item.sku,
+        is_service: item.is_service || 0,
+
+        variant_info: item.variant_info || null,
+        image_url: item.image_url || null
+      })),
+
+      gst_enabled: gstEnabled,
+      gst_rate: gstEnabled ? Number(gstRate) : 0,
+      discount: Number(discount),
+      additional_charges: cleanedAdditionalCharges
+    }
+
+    let createdNewDraft = false
+
+    if (isDraft && draftId) {
+      // 🔁 UPDATE EXISTING DRAFT
+      await axios.put(`${API}/invoices/draft/${draftId}`, payload)
+    } else {
+      // 🆕 CREATE NEW DRAFT
+      const res = await axios.post(`${API}/invoices/draft`, payload)
+
+      setDraftId(res.data.id)
+      setIsDraft(true)
+
+      createdNewDraft = true
+    }
+
+    // ✅ SHOW TOAST ONLY WHEN NOT SILENT
+    if (!silent && !draftToastLock.current) {
+
+      draftToastLock.current = true
+
+      toast.success(
+        createdNewDraft
+          ? "Draft saved successfully"
+          : "Draft updated successfully",
+        { duration: 3000 }
+      )
+
+      setTimeout(() => {
+        draftToastLock.current = false
+      }, 3000)
+    }
+
+  } catch (err) {
+
+    console.error("Draft save failed:", err)
+
+    if (!silent) {
+      toast.error(
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Failed to save draft"
+      )
+    }
+  }
+}
+
+const autoSaveDraft = () => {
+  if (!customerName) return
+  if (lineItems.length === 0) return
+
+  handleSaveDraft(true) // silent mode
+}
+
+const fetchDrafts = async () => {
+  try {
+    const res = await axios.get(`${API}/invoices/drafts`)
+
+    // 🔥 SAFETY NORMALIZATION
+    const list =
+      Array.isArray(res.data)
+        ? res.data
+        : Array.isArray(res.data?.data)
+        ? res.data.data
+        : []
+
+    setDrafts(list)
+  } catch (err) {
+    console.error("Draft fetch failed", err)
+    toast.error("Failed to load drafts")
+    setDrafts([]) // ⛑️ fallback
+  }
+}
+
+
+      const handleProductSearch = async (query) => {
+        try {
+          setIsSearchingProducts(true)
+          const res = await axios.get(`${API}/products/search?q=${query}`)
+          setProductSearchResults(res.data || [])
+        } catch (err) {
+          console.error("Product search failed:", err)
+        } finally {
+          setIsSearchingProducts(false)
+        }
+      }
+
+      const selectProduct = (product) => {
+        if (product.variants && product.variants.length > 0) {
+          setSelectedProductForVariant(product)
+          setShowVariantDialog(true)
+        } else {
+          addProductToInvoice(product)
+        }
+        setProductSearch("")
+        setSearchResults([])
+        setProductSearchQuery("")
+        setProductSearchResults([])
+      }
+
+      const addProductToInvoice = (product, variant = null) => {
+        const newItem = {
+          product_id: product.id,
+          sku: variant ? variant.v_sku : product.sku,
+          product_name: variant
+            ? `${product.name} (${variant.variant_name || variant.color || variant.size || "Variant"})`
+            : product.name,
+          quantity: 1,
+          price: variant?.v_selling_price || product.selling_price,
+          gst_rate: 18,
+          total: variant?.v_selling_price || product.selling_price,
+          is_service: 0,
+          image_url: variant?.image_url || (product.images && product.images[0]) || "/placeholder.png",
+          v_sku: variant ? variant.v_sku : null,
+          variant_name: variant ? variant.variant_name : null,
+          color: variant ? variant.color : null,
+          size: variant ? variant.size : null,
+          variant_info: variant,
+        }
+
+        setLineItems((prev) => {
+          const existingIdx = prev.findIndex((item) => (item.v_sku || item.sku) === newItem.sku)
+          if (existingIdx !== -1) {
+            const updated = [...prev]
+            updated[existingIdx].quantity += 1
+            updated[existingIdx].total = updated[existingIdx].quantity * updated[existingIdx].price
+            return updated
+          }
+          return [...prev, newItem]
+        })
+
+        toast.success(`${newItem.product_name} added`)
+        setShowVariantDialog(false)
+        setSelectedProduct(null)
+      }
+
+      const searchCustomerByPhone = async (phone) => {
+        if (phone.length < 10) return
+
+        try {
+          const res = await axios.get(`${API}/customers/search?phone=${phone}`)
+
+          if (res.data) {
+            setCustomerId(res.data.id)
+            setCustomerName(res.data.name)
+            setCustomerEmail(res.data.email)
+            setCustomerAddress(res.data.address || "")
+            toast.success("Customer found!")
+          } else {
+            setCustomerId(null)
+            setCustomerName("")
+            setCustomerEmail("")
+            setCustomerAddress("")
+            toast.info("New customer - please fill details")
+          }
+        } catch (err) {
+          console.error("Customer search failed", err)
+          toast.error("Customer lookup failed")
+        }
+      }
+
+      const addLineItem = () => {
+        setLineItems((prev) => [
+          ...prev,
+          {
+            product_id: "",
+            product_name: "",
+            quantity: 1,
+            price: 0,
+            gst_rate: 18,
+            total: 0,
+            is_service: 0,
+            v_sku: null,
+            variant_name: null,
+            color: null,
+            size: null,
+            variant_info: null, // Added for compatibility with updates
+          },
+        ])
+      }
+
+      const updateLineItem = (index, field, value) => {
+        const updated = [...lineItems]
+        updated[index][field] = value
+
+        if (field === "product_id") {
+          const product = products.find((p) => String(p.id) === String(value))
+          if (product) {
+            const hasVariants = product.variants && product.variants.length > 0
+
+            if (hasVariants && product.variants.length === 1) {
+              // If only one variant, auto-select it
+              const variant = product.variants[0]
+              updated[index].product_name =
+                `${product.name} (${variant.variant_name || variant.color || variant.size || "Variant"})`
+              updated[index].price = variant.v_selling_price || product.selling_price
+              updated[index].v_sku = variant.v_sku
+              updated[index].variant_name = variant.variant_name
+              updated[index].color = variant.color
+              updated[index].size = variant.size
+              updated[index].image_url = variant.image_url || (product.images && product.images[0]) || "/placeholder.png"
+              updated[index].variant_info = variant // Store variant info for compatibility
+            } else {
+              // Regular product or multiple variants (show base product)
+              updated[index].product_name = product.name
+              updated[index].price = product.selling_price
+              updated[index].v_sku = null
+              updated[index].variant_name = null
+              updated[index].color = null
+              updated[index].size = null
+              updated[index].image_url = (product.images && product.images[0]) || "/placeholder.png"
+              updated[index].variant_info = null // Clear variant info
+            }
+
+            updated[index].total = updated[index].price * updated[index].quantity
+          }
+        }
+
+        if (field === "quantity" || field === "price") {
+          updated[index].total = updated[index].price * updated[index].quantity
+        }
+
+        setLineItems(updated)
+      }
+
+    const handleSkuScan = async (skuInputRaw) => {
+      if (!skuInputRaw) return
+      if (scanLockRef.current) return
+      scanLockRef.current = true
+
+      let scannedSku = skuInputRaw.trim()
+
+      // ✅ Handle QR JSON payload
+      try {
+        const parsed = JSON.parse(scannedSku)
+        scannedSku = parsed.v_sku || parsed.sku || scannedSku
+      } catch {}
+
+      try {
+        const res = await fetch(`${API}/products/sku/${encodeURIComponent(scannedSku)}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+        })
+
+        if (!res.ok) throw new Error("Not found")
+        const product = await res.json()
+
+        const isVariant = !!product.variant
+        const hasVariants = Array.isArray(product.variants) && product.variants.length > 0
+
+        // 🚨 CASE 1: PRODUCT QR / PRODUCT SKU WITH VARIANTS
+        if (!isVariant && hasVariants) {
+          setSelectedProductForVariant(product)
+          setShowVariantDialog(true)
+          setSkuInput("")
+          return
+        }
+
+        // 🟢 CASE 2: VARIANT QR / VARIANT SKU
+        let displayName, itemPrice, itemImage, variantInfo
+
+        if (isVariant) {
+          const variant = product.variant
+          const variantLabel = variant.variant_name || variant.color || variant.size || "Variant"
+
+          displayName = `${product.name} (${variantLabel})`
+          itemPrice = variant.v_selling_price || product.selling_price
+          itemImage =
+            variant.image_url ||
+            variant.v_image_url ||
+            product.images?.[0] ||
+            "/placeholder.png"
+
+          variantInfo = {
+            v_sku: variant.v_sku,
+            variant_name: variant.variant_name,
+            color: variant.color,
+            size: variant.size,
+            v_selling_price: variant.v_selling_price,
+          }
+        } else {
+          // 🟢 CASE 3: PRODUCT WITHOUT VARIANTS
+          displayName = product.name
+          itemPrice = product.selling_price
+          itemImage = product.images?.[0] || "/placeholder.png"
+          variantInfo = null
+        }
+
+        setLineItems((prev) => {
+          const key = isVariant ? variantInfo.v_sku : product.sku
+          const idx = prev.findIndex((i) => (i.v_sku || i.sku) === key)
+
+          if (idx !== -1) {
+            const updated = [...prev]
+            if (updated[idx].is_service !== 1) {
+              updated[idx].quantity += 1
+              updated[idx].total = updated[idx].quantity * updated[idx].price
+            }
+            return updated
+          }
+
+          return [
+            ...prev,
+            {
+              product_id: product.id,
+              sku: product.sku,
+              product_name: displayName,
+              quantity: 1,
+              price: itemPrice,
+              gst_rate: 18,
+              total: itemPrice,
+              is_service: product.is_service,
+              image_url: itemImage,
+
+              v_sku: variantInfo?.v_sku || null,
+              variant_name: variantInfo?.variant_name || null,
+              color: variantInfo?.color || null,
+              size: variantInfo?.size || null,
+              v_selling_price: variantInfo?.v_selling_price || null,
+              variant_info: variantInfo,
+            },
+          ]
+        })
+
+        toast.success(`${displayName} added`)
+        setSkuInput("")
+      } catch (err) {
+        console.error("SKU scan failed:", err)
+        toast.error("Product not found")
+      } finally {
+        setTimeout(() => {
+          scanLockRef.current = false
+        }, 500)
+      }
+    }
+
+useEffect(() => {
+  if (activeTab === "drafts") {
+    fetchDrafts()
+  }
+}, [activeTab])
+
+      useEffect(() => {
+        let html5QrCode = null
+
+        if (showCamera && scanMode === "camera") {
+          const startScanner = async () => {
+            setCameraLoading(true)
+            try {
+              html5QrCode = new Html5Qrcode("reader")
+              scannerRef.current = html5QrCode
+
+              const config = {
+                fps: 12,
+                qrbox: { width: 250, height: 250 },
+                aspectRatio: 1.0,
+                formatsToSupport: [
+                  Html5QrcodeSupportedFormats.QR_CODE,
+                  Html5QrcodeSupportedFormats.DATA_MATRIX,
+                  Html5QrcodeSupportedFormats.PDF_417,
+                  Html5QrcodeSupportedFormats.AZTEC,
+                  Html5QrcodeSupportedFormats.CODE_128,
+                  Html5QrcodeSupportedFormats.CODE_39,
+                  Html5QrcodeSupportedFormats.EAN_13,
+                ],
+              }
+
+              await html5QrCode.start(
+                { facingMode: "environment" },
+                config,
+                (decodedText) => {
+                  handleSkuScan(decodedText)
+
+                  scannerRef.current?.pause(true)
+
+                  setTimeout(() => {
+                    scannerRef.current?.resume()
+                  }, 900)
+                },
+                () => { },
+              )
+              setCameraLoading(false)
+            } catch (err) {
+              console.error("Failed to start camera:", err)
+              toast.error("Could not access camera")
+              setShowCamera(false)
+            }
+          }
+
+          startScanner()
+        }
+
+        return () => {
+          if (html5QrCode && html5QrCode.isScanning) {
+            html5QrCode
+              .stop()
+              .then(() => {
+                html5QrCode.clear()
+              })
+              .catch((err) => console.error("Failed to clear scanner", err))
+          }
+        }
+      }, [showCamera])
+
+const removeLineItem = (index) => {
+  setLineItems((prev) => prev.filter((_, i) => i !== index))
+}
+
+// function calculateTotals() {
+
+//   const safeItems = Array.isArray(lineItems) ? lineItems : []
+
+//   const itemsSubtotal = safeItems.reduce(
+//     (sum, item) => sum + Number(item.total || 0),
+//     0
+//   )
+
+//   const extraAmount = additionalCharges.reduce(
+//     (sum, c) => sum + Number(c.amount || 0),
+//     0
+//   )
+
+//   const taxableAmount = itemsSubtotal + extraAmount
+
+//   const gstAmount = gstEnabled
+//     ? (taxableAmount * Number(gstRate || 0)) / 100
+//     : 0
+
+//   const total = taxableAmount + gstAmount - Number(discount || 0)
+
+//   return {
+//     subtotal: taxableAmount,
+//     gstAmount,
+//     total,
+//   }
+// }
+
+     const resetForm = () => {
+  // 🧾 Customer
+  setCustomerPhone("")
+  setCustomerName("")
+  setCustomerEmail("")
+  setCustomerAddress("")
+  setCustomerId(null)
+
+  // 🧺 Invoice
+  setLineItems([])
+  setDiscount(0)
+setPaymentStatus("")
+setPaymentMode("cash")
+
+  // 🧾 Draft state (IMPORTANT)
+  setDraftId(null)
+  setIsDraft(false)
+setAdditionalCharges([{ label: "", amount: "" }])
+
+  // ➕ Extras
+  // setManualAmount(0)
+  // setManualLabel("Additional Charge")
+
+  // 🔍 Search / Scan
+  setSkuInput("")
+  setProductSearch("")
+  setSearchResults([])
+  setShowProductSearch(false)
+  setSelectedProduct(null)
+  setShowVariantDialog(false)
+
+  // 🔎 Product search
+  setProductSearchQuery("")
+  setProductSearchResults([])
+  setIsSearchingProducts(false)
+  setSelectedProductForVariant(null)
+
+  // 🧾 GST
+  setGstEnabled(false)
+  setGstRate(18)
+  setPaidAmount(0)
+  localStorage.removeItem(INVOICE_STORAGE_KEY)
+}
+
+const generatePDF = (invoice) => {
+        const printWindow = window.open("", "_blank")
+        const subtotal = invoice.subtotal
+// const additionalAmount = invoice.additional_amount || 0
+// const additionalLabel = invoice.additional_label || "Additional Charge"
+const gstAmount = invoice.gst_amount
+const total = invoice.total
+
+
+        const formatProductName = (item) => {
+          const name = item.product_name
+          const details = []
+
+          if (item.color) details.push(`Color: ${item.color}`)
+          if (item.size) details.push(`Size: ${item.size}`)
+
+          // Check variant_info for nested details if top level is missing
+          if (!item.color && item.variant_info?.color) details.push(`Color: ${item.variant_info.color}`)
+          if (!item.size && item.variant_info?.size) details.push(`Size: ${item.variant_info.size}`)
+
+          if (item.variant_name && !name.includes(item.variant_name)) {
+            details.push(item.variant_name)
+          }
+          if (item.v_sku || item.sku) details.push(`SKU: ${item.v_sku || item.sku}`)
+
+          if (details.length > 0) {
+            return `<div style="font-weight: bold;">${name}</div><div style="color: #555; font-size: 10px; margin-top: 2px;">${details.join(" | ")}</div>`
+          }
+
+          return name
+        }
+
+        const pdfContent = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Invoice ${invoice.invoice_number}</title>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { font-family: 'Arial', sans-serif; padding: 40px; color: #333; }
+              .invoice-container { max-width: 800px; margin: 0 auto; border: 2px solid #333; padding: 30px; }
+              .header { text-align: center; border-bottom: 3px solid #000; padding-bottom: 20px; margin-bottom: 30px; }
+              .company-name { font-size: 32px; font-weight: bold; color: #000; margin-bottom: 5px; }
+              .company-tagline { font-size: 14px; color: #666; margin-bottom: 10px; }
+              .company-details { font-size: 12px; color: #666; }
+              .invoice-info { display: flex; justify-content: space-between; margin-bottom: 30px; }
+              .info-block { flex: 1; }
+              .info-block h3 { font-size: 14px; margin-bottom: 10px; color: #000; border-bottom: 2px solid #000; padding-bottom: 5px; }
+              .info-block p { font-size: 12px; margin: 5px 0; }
+              table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+              thead { background: #000; color: #fff; }
+              th, td { padding: 12px; text-align: left; border: 1px solid #ddd; }
+              th { font-weight: bold; }
+              .text-right { text-align: right; }
+              .totals { margin-top: 20px; float: right; width: 300px; }
+              .totals table { margin: 0; }
+              .totals td { padding: 8px; }
+              .totals .total-row { font-weight: bold; font-size: 16px; background: #f0f0f0; }
+              .footer { clear: both; margin-top: 50px; padding-top: 20px; border-top: 2px solid #000; }
+              .signature { display: flex; justify-content: space-between; margin-top: 40px; }
+              .signature-block { text-align: center; }
+              .signature-line { border-top: 1px solid #000; width: 200px; margin-top: 50px; padding-top: 5px; }
+              .terms { font-size: 10px; color: #666; margin-top: 20px; }
+              .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+              .badge-paid { background: #4CAF50; color: white; }
+              .badge-pending { background: #FF9800; color: white; }
+              .badge-overdue { background: #F44336; color: white; }
+              @media print {
+                body { padding: 0; }
+                .no-print { display: none; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="invoice-container">
+              <div class="header">
+                <div class="company-name">R RIDE</div>
+    <div class="company-tagline" style="font-weight: bold;">BIKE GARAGE & STUDIO</div>
+
+                <div class="company-details">
+                  <p>Mahaveer Building, gala no 09, near payal talkies, mandai road,
+    Dhamankar naka, Bhiwandi, 421305 </p>
+                  <p>Phone: +91 90822 582580 | Email: outransystems@gmail.com</p>
+                </div>
+              </div>
+
+              <div class="invoice-info">
+                <div class="info-block">
+                  <h3>INVOICE TO</h3>
+                  <p><strong>${invoice.customer_name}</strong></p>
+                  <p>${invoice.customer_phone || "N/A"}</p>
+                  <p>${invoice.customer_address || "N/A"}</p>
+                </div>
+                <div class="info-block" style="text-align: right;">
+                  <h3>INVOICE DETAILS</h3>
+                  <p><strong>Created By:</strong> ${invoice.created_by || "—"}</p>
+
+                  <p><strong>Invoice No:</strong> ${invoice.invoice_number}</p>
+                  <p><strong>Date:</strong> ${new Date(invoice.created_at).toLocaleDateString()}</p>
+                  <p><strong>Status:</strong>
+                    <span class="badge badge-${invoice.payment_status}">
+                      ${invoice.payment_status.toUpperCase()}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Product</th>
+                    <th class="text-right">Qty</th>
+                    <th class="text-right">Price</th>
+    <th class="text-right">
+      ${invoice.gst_enabled ? `GST ${invoice.gst_rate}%` : "GST"}
+    </th>
+                    <th class="text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${invoice.items
+            .map(
+              (item, index) => `
+                    <tr>
+                      <td>${index + 1}</td>
+                      <td>${formatProductName(item)}</td>
+                      <td class="text-right">${item.quantity}</td>
+                      <td class="text-right">₹${formatCurrency(item.price)}</td>
+                      <td class="text-right">${item.gst_rate}%</td>
+                      <td class="text-right">₹${formatCurrency(item.total)}</td>
+                    </tr>
+                  `,
+            )
+            .join("")}
+                </tbody>
+              </table>
+
+              <div class="totals">
+                <table>
+                  <tr>
+                    <td>Subtotal:</td>
+                    <td class="text-right">₹${formatCurrency(subtotal)}</td>
+                  </tr>
+                  <tr>
+    ${gstAmount > 0 ? `
+    <tr>
+      <td>GST Amount:</td>
+      <td class="text-right">₹${formatCurrency(gstAmount)}</td>
+    </tr>
+    ` : ""}
+                  </tr>
+              ${Array.isArray(invoice.additional_charges)
+  ? invoice.additional_charges
+      .filter(c => Number(c.amount) > 0)
+      .map(c => `
+        <tr>
+          <td>${c.label || "Additional Charge"}:</td>
+          <td class="text-right">₹${formatCurrency(c.amount)}</td>
+        </tr>
+      `).join("")
+  : ""
+}
+
+                  <tr>
+                    <td>Discount:</td>
+                    <td class="text-right">-₹${formatCurrency(invoice.discount)}</td>
+                  </tr>
+                  <tr class="total-row">
+                    <td>Total Amount:</td>
+                    <td class="text-right">₹${formatCurrency(total)}</td>
+                  </tr>
+                </table>
+              </div>
+
+              <div class="footer">
+                <div class="terms">
+                  <h4>Terms & Conditions:</h4>
+                  <p>1. Payment is due within 30 days of invoice date.</p>
+                  <p>2. Late payments may incur additional charges.</p>
+                  <p>3. Goods once sold will not be taken back or exchanged.</p>
+                  <p>4. All disputes subject to local jurisdiction only.</p>
+                </div>
+
+                <div class="signature">
+                  <div class="signature-block">
+                    <div class="signature-line">Customer Signature</div>
+                  </div>
+                  <div class="signature-block">
+                    <div class="signature-line">Authorized Signatory</div>
+                    <p style="margin-top: 10px; font-weight: bold;">R RIDE GARAGE</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="no-print" style="text-align: center; margin-top: 20px;">
+              <button onclick="window.print()" style="padding: 10px 20px; background: #000; color: #fff; border: none; cursor: pointer; border-radius: 5px;">
+                Print Invoice
+              </button>
+              <button onclick="window.close()" style="padding: 10px 20px; background: #666; color: #fff; border: none; cursor: pointer; border-radius: 5px; margin-left: 10px;">
+                Close
+              </button>
+            </div>
+          </body>
+          </html>
+        `
+
+        printWindow.document.write(pdfContent)
+        printWindow.document.close()
+      }
+const shareInvoice = async (invoice) => {
+  try {
+    const element = document.createElement("div")
+
+    const subtotal = invoice.subtotal
+    const gstAmount = invoice.gst_amount
+    const total = invoice.total
+
+    element.innerHTML = `
+      <div style="padding:40px;font-family:Arial">
+        <h2>R RIDE - BIKE GARAGE & STUDIO</h2>
+        <p><strong>Invoice No:</strong> ${invoice.invoice_number}</p>
+        <p><strong>Date:</strong> ${new Date(invoice.created_at).toLocaleDateString()}</p>
+        <hr/>
+        <p><strong>Customer:</strong> ${invoice.customer_name}</p>
+        <p><strong>Phone:</strong> ${invoice.customer_phone || "N/A"}</p>
+        <br/>
+
+        <table style="width:100%;border-collapse:collapse" border="1">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Product</th>
+              <th>Qty</th>
+              <th>Price</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${
+              invoice.items.map((item, i) => `
+                <tr>
+                  <td>${i+1}</td>
+                  <td>${item.product_name}</td>
+                  <td>${item.quantity}</td>
+                  <td>₹${formatCurrency(item.price)}</td>
+                  <td>₹${formatCurrency(item.total)}</td>
+                </tr>
+              `).join("")
+            }
+          </tbody>
+        </table>
+
+        <br/>
+        <p><strong>Subtotal:</strong> ₹${formatCurrency(subtotal)}</p>
+        <p><strong>GST:</strong> ₹${formatCurrency(gstAmount)}</p>
+        <p><strong>Discount:</strong> ₹${formatCurrency(invoice.discount)}</p>
+        <h3>Total: ₹${formatCurrency(total)}</h3>
+      </div>
+    `
+
+    const pdfBlob = await html2pdf()
+      .from(element)
+      .outputPdf("blob")
+
+    const file = new File(
+      [pdfBlob],
+      `Invoice-${invoice.invoice_number}.pdf`,
+      { type: "application/pdf" }
+    )
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        title: `Invoice ${invoice.invoice_number}`,
+        files: [file],
+      })
+    } else {
+      alert("File sharing not supported on this device")
+    }
+
+  } catch (err) {
+    console.error("Share failed:", err)
+  }
+}
+
+
+      const updateInvoiceStatus = async (invoiceId, newStatus) => {
+        try {
+          await axios.patch(`${API}/invoices/${invoiceId}/status`, null, {
+            params: { payment_status: newStatus },
+          })
+
+          toast.success("Invoice status updated")
+          fetchInvoices()
+        } catch (err) {
+          toast.error(err?.response?.data?.detail || "Failed to update status")
+        }
+      }
+
+     const calculateInvoiceTotals = (invoice) => {
+  const itemsSubtotal = Array.isArray(invoice.items)
+    ? invoice.items.reduce((sum, item) => sum + Number(item.total || 0), 0)
+    : 0
+
+  const additionalTotal = Array.isArray(invoice.additional_charges)
+    ? invoice.additional_charges.reduce(
+        (sum, c) => sum + Number(c.amount || 0),
+        0
+      )
+    : 0
+
+  const taxable = itemsSubtotal + additionalTotal
+  const gstAmount = Number(invoice.gst_amount || 0)
+
+  const total = taxable + gstAmount - Number(invoice.discount || 0)
+
+  return {
+    subtotal: taxable,
+    gstAmount,
+    total,
+  }
+}
+
+const getInvoiceTotal = (inv) => {
+  const itemsTotal = Array.isArray(inv.items)
+    ? inv.items.reduce((s, i) => s + Number(i.total || 0), 0)
+    : 0
+
+  const extras = Array.isArray(inv.additional_charges)
+    ? inv.additional_charges.reduce(
+        (s, c) => s + Number(c.amount || 0),
+        0
+      )
+    : 0
+
+  return (
+    itemsTotal +
+    extras +
+    Number(inv.gst_amount || 0) -
+    Number(inv.discount || 0)
+  )
+}
+
+      const filteredInvoices = invoices.filter(
+        (inv) =>
+          inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          inv.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          inv.customer_phone?.toLowerCase().includes(searchTerm.toLowerCase()),
+      )
+
+const loadDraft = (draft) => {
+  if (!draft || !draft.id) {
+    toast.error("Invalid draft")
+    return
+  }
+
+  // 🔒 Draft identity (MOST IMPORTANT)
+  setDraftId(draft.id)
+  setIsDraft(true)
+
+  // 👤 Customer
+  setCustomerId(draft.customer_id ?? null)
+  setCustomerName(draft.customer_name ?? "")
+  setCustomerPhone(draft.customer_phone ?? "")
+  setCustomerAddress(draft.customer_address ?? "")
+  setCustomerEmail("") // not stored in invoice table
+
+  // 🧺 Items
+  const parsedItems = Array.isArray(draft.items) ? draft.items : []
+
+  setLineItems(
+    parsedItems.map((item) => ({
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: Number(item.quantity || 1),
+      price: Number(item.price || 0),
+      total: Number(item.total || 0),
+      gst_rate: Number(item.gst_rate || 0),
+
+      sku: item.sku || null,
+      v_sku: item.v_sku || item.sku || null,
+      is_service: item.is_service || 0,
+
+      image_url: item.image_url || "/placeholder.png",
+      variant_info: item.variant_info || null,
+    }))
+  )
+
+  // 💰 Amounts
+// 💰 Amounts
+setDiscount(Number(draft.discount || 0))
+setPaymentStatus(draft.payment_status || "pending")
+
+// ✅ ADD THIS
+if (Array.isArray(draft.additional_charges) && draft.additional_charges.length > 0) {
+  setAdditionalCharges(
+    draft.additional_charges.map((c) => ({
+      label: c.label || "",
+      amount: Number(c.amount || 0),
+    }))
+  )
+} else {
+  setAdditionalCharges([{ label: "", amount: "" }])
+}
+
+  // 🧾 GST
+  setGstEnabled(Boolean(draft.gst_enabled))
+  setGstRate(Number(draft.gst_rate || 18))
+
+  setActiveTab("create")
+  toast.success("Draft loaded")
+}
+      const handleSelectProduct = (product) => {
+        const variants = product.variants || []
+
+        if (variants.length > 1) {
+          // Show variant selection dialog
+          setSelectedProductForVariant(product)
+          setShowVariantDialog(true)
+        } else if (variants.length === 1) {
+          // Auto-select the only variant
+          addSelectedProductToInvoice(product, variants[0])
+        } else {
+          // No variants, add base product
+          addSelectedProductToInvoice(product, null)
+        }
+
+        // Clear search
+        setProductSearchQuery("")
+        setProductSearchResults([])
+      }
+
+      const addSelectedProductToInvoice = (product, variant) => {
+        let displayName, itemPrice, itemImage, itemSku, variantInfo
+
+        if (variant) {
+          const variantLabel = variant.variant_name || variant.color || variant.size || "Variant"
+          displayName = `${product.name} (${variantLabel})`
+          itemPrice = variant.v_selling_price || product.selling_price
+          itemImage =
+            variant.image_url || variant.v_image_url || (product.images && product.images[0]) || "/placeholder.png"
+          itemSku = variant.v_sku
+          variantInfo = {
+            v_sku: variant.v_sku,
+            variant_name: variant.variant_name,
+            color: variant.color,
+            size: variant.size,
+            v_selling_price: variant.v_selling_price,
+          }
+        } else {
+          displayName = product.name
+          itemPrice = product.selling_price
+          itemImage = (product.images && product.images[0]) || "/placeholder.png"
+          itemSku = product.sku
+          variantInfo = null
+        }
+
+        setLineItems((prev) => {
+          const key = itemSku
+          const idx = prev.findIndex((i) => (i.v_sku || i.sku) === key)
+
+          if (idx !== -1) {
+            const updated = [...prev]
+            if (updated[idx].is_service !== 1) {
+              updated[idx].quantity += 1
+              updated[idx].total = updated[idx].quantity * updated[idx].price
+            }
+            return updated
+          }
+
+          return [
+            ...prev,
+            {
+              product_id: product.id,
+              sku: product.sku,
+              product_name: displayName,
+              quantity: 1,
+              price: itemPrice,
+              gst_rate: 18,
+              total: itemPrice,
+              is_service: product.is_service,
+              image_url: itemImage,
+              v_sku: variantInfo?.v_sku || null,
+              variant_name: variantInfo?.variant_name || null,
+              color: variantInfo?.color || null,
+              size: variantInfo?.size || null,
+              variant_info: variantInfo,
+            },
+          ]
+        })
+
+        toast.success(`${displayName} added`)
+        setShowVariantDialog(false)
+        setSelectedProductForVariant(null)
+      }
+
+      return (
+        <div className="container mx-auto p-4 max-w-6xl pb-20">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-6">
+            <div>
+              <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">Invoice Management</h1>
+              <p className="text-muted-foreground text-sm md:text-base mt-1">Create and manage invoices with GST</p>
+            </div>
+            <div className="flex gap-2 w-full md:w-auto">
+              <Button
+  variant={activeTab === "drafts" ? "default" : "outline"}
+  onClick={() => setActiveTab("drafts")}
+>
+  Drafts
+</Button>
+
+              <Button
+                variant={activeTab === "create" ? "default" : "outline"}
+                onClick={() => setActiveTab("create")}
+                className="flex-1 md:flex-none"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                <span className="hidden sm:inline">Create Invoice</span>
+                <span className="sm:hidden">Create</span>
+              </Button>
+              <Button
+                variant={activeTab === "list" ? "default" : "outline"}
+                onClick={() => setActiveTab("list")}
+                className="flex-1 md:flex-none"
+              >
+                <FileText className="w-4 h-4 mr-2" />
+                <span className="hidden sm:inline">View Invoices</span>
+                <span className="sm:hidden">View</span>
+              </Button>
+            </div>
+          </div>
+
+          {activeTab === "create" && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="lg:col-span-2 space-y-6">
+
+                <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+                 <CardHeader className="border-b bg-muted/30">
+  <div className="flex items-center justify-between">
+    
+    <div className="flex items-center gap-2">
+      <Plus className="w-5 h-5 text-primary" />
+      <CardTitle>Create Invoice</CardTitle>
+    </div>
+
+    {draftId && (
+      <div className="bg-yellow-50 border border-yellow-300 text-yellow-800 px-3 py-1 rounded-lg text-xs font-medium">
+        Editing Draft • #{draftId}
+      </div>
+    )}
+
+  </div>
+</CardHeader>
+                  <CardContent className="p-6 space-y-6">
+                    {/* Customer Details Section */}
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Customer Details
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Customer Phone<span className="text-red-500">*</span>
+
+                          </Label>
+                          <Input
+                            placeholder="Enter phone number"
+                            value={customerPhone}
+                            onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ""))}
+                            maxLength={10}
+                            required
+                            className="h-11 rounded-xl"
+                          />
+
+                        </div>
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Customer Name <span className="text-red-500">*</span>
+                          </Label>
+                          <Input
+                            placeholder="Enter name"
+                            value={customerName}
+                            onChange={(e) => setCustomerName(e.target.value)}
+                            required
+                            className="h-11 rounded-xl"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Email
+                          </Label>
+                        <Input
+      type="email"
+      placeholder="customer@example.com (optional)"
+      value={customerEmail}
+      onChange={(e) => setCustomerEmail(e.target.value)}
+      className="h-11 rounded-xl"
+    />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Address
+                          </Label>
+                          <Input
+                            placeholder="Enter address"
+                            value={customerAddress}
+                            onChange={(e) => setCustomerAddress(e.target.value)}
+                            className="h-11 rounded-xl"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="relative">
+                        <Label
+                          htmlFor="productSearch"
+                          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block"
+                        >
+                          Search Product by Name or SKU
+                        </Label>
+                        <div className="relative group">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                          <Input
+                            id="productSearch"
+                            placeholder="Search products (e.g., Thunder, 1309)..."
+                            value={productSearchQuery}
+                            onChange={(e) => setProductSearchQuery(e.target.value)}
+                            onKeyDown={handleProductSearchKeyDown}
+                            className="pl-10 h-12 bg-muted/50 border-muted-foreground/20 focus:border-primary/50 transition-all rounded-xl"
+                          />
+                          {productSearchQuery && (
+                            <button
+                              onClick={() => setProductSearchQuery("")}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-muted text-muted-foreground"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Search Results Dropdown - FIXED SCROLL */}
+                        {productSearchResults.length > 0 && (
+                          <div className="absolute z-50 w-full mt-2 bg-card border rounded-xl shadow-2xl max-h-[350px] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+                            <div className="p-2 space-y-1">
+                              {productSearchResults.map((product, index) => (
+                                <button
+  key={product.id}
+  ref={(el) => (resultRefs.current[index] = el)}
+                                  onClick={() => selectProduct(product)}
+                                  className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors text-left group ${
+                                    selectedSearchIndex === index
+                                      ? "bg-primary text-primary-foreground shadow-md"
+                                      : "hover:bg-muted text-foreground"
+                                  }`}
+                                >
+                                  <div className="w-12 h-12 rounded-lg bg-muted border flex-shrink-0 overflow-hidden">
+                                    <img
+                                      src={product.images?.[0] || "/placeholder.png"}
+                                      alt={product.name}
+                                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                    />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`font-semibold text-sm truncate ${selectedSearchIndex === index ? "text-primary-foreground" : ""}`}>
+                                      {product.name}
+                                    </p>
+                                    <div className={`flex items-center gap-2 text-xs mt-0.5 ${selectedSearchIndex === index ? "text-primary-foreground/80" : "text-muted-foreground"}`}>
+                                      <span className="font-mono bg-muted/80 px-1.5 py-0.5 rounded text-[10px]">
+                                        {product.sku}
+                                      </span>
+                                      <span>•</span>
+                                      <span className={`font-medium ${selectedSearchIndex === index ? "text-primary-foreground" : "text-primary"}`}>₹{product.selling_price}</span>
+                                    </div>
+                                  </div>
+                                  {product.variants?.length > 0 && (
+                                    <div className={`text-[10px] font-bold px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 ${
+                                      selectedSearchIndex === index 
+                                        ? "bg-primary-foreground/20 text-primary-foreground" 
+                                        : "bg-primary/10 text-primary"
+                                    }`}>
+                                      {product.variants.length}v
+                                    </div>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {isSearchingProducts && (
+                          <div className="absolute right-12 top-1/2 -translate-y-1/2">
+                            <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <span className="w-full border-t" />
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                          <span className="bg-card px-2 text-muted-foreground">OR SCAN SKU</span>
+                        </div>
+                      </div>
+    */}
+                      {/* SKU Scan Section
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            ref={skuInputRef}
+                            placeholder="Scan or Enter SKU..."
+                            value={skuInput}
+                            onChange={(e) => setSkuInput(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleSkuScan(skuInput)}
+                            className="pl-10 h-11 bg-muted/50 border-muted-foreground/20 rounded-xl"
+                          />
+                        </div>
+                        <Button
+                          onClick={() => handleSkuScan(skuInput)}
+                          className="h-11 px-6 rounded-xl shadow-lg shadow-primary/20"
+                        >
+                          Add
+                        </Button>
+                      </div> */}
+                    </div>
+
+                    {/* Line Items Section */}
+                    <div className="space-y-4">
+                      <Button
+  variant="outline"
+  onClick={() => setShowManualDialog(true)}
+  className="rounded-xl"
+>
+  + Add Manual Item
+</Button>
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Line Items
+                      </h3>
+                      <div className="max-h-[600px] overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                        {lineItems.length === 0 ? (
+                          <div className="text-center py-10 border-2 border-dashed rounded-2xl border-muted-foreground/20">
+                            <Plus className="w-10 h-10 mx-auto mb-2 text-muted-foreground/30" />
+                            <p className="text-muted-foreground">Add products to start your invoice</p>
+                          </div>
+                        ) : (
+                          lineItems.map((item, index) => (
+                            <div
+                              key={index}
+                              className="p-4 border rounded-2xl bg-card/50 hover:border-primary/30 transition-all group"
+                            >
+                              <div className="flex gap-4">
+                                <div className="w-20 h-20 rounded-xl bg-muted border overflow-hidden shrink-0">
+                                  <img
+                                    src={item.image_url || "/placeholder.png"}
+                                    alt={item.product_name}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className="font-bold text-sm line-clamp-2">{item.product_name}</h4>
+                                      {item.v_sku && (
+                                        <p className="text-xs text-muted-foreground font-mono mt-1">{item.v_sku}</p>
+                                      )}
+                                      {(item.color || item.size || item.variant_name) && (
+                                        <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                                          {item.variant_name && <p>Variant: <span className="font-medium text-foreground">{item.variant_name}</span></p>}
+                                          {item.color && <p>Color: <span className="font-medium text-foreground">{item.color}</span></p>}
+                                          {item.size && <p>Size: <span className="font-medium text-foreground">{item.size}</span></p>}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => removeLineItem(index)}
+                                      className="h-8 w-8 text-destructive hover:bg-destructive/10 shrink-0"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  </div>
+                                  <div className="flex items-center justify-between mt-3">
+                                    <div className="flex items-center border rounded-lg overflow-hidden h-9">
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => updateLineItem(index, "quantity", Math.max(1, item.quantity - 1))}
+                                        className="h-full w-9 rounded-none hover:bg-muted"
+                                      >
+                                        -
+                                      </Button>
+                                      <div className="w-10 text-center font-bold text-sm">{item.quantity}</div>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => updateLineItem(index, "quantity", item.quantity + 1)}
+                                        className="h-full w-9 rounded-none hover:bg-muted"
+                                      >
+                                        +
+                                      </Button>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs text-muted-foreground">Price</p>
+                                      <p className="font-bold text-primary">₹{formatCurrency(item.price)}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+{/* ================= ADDITIONAL CHARGES ================= */}
+<Card className="mt-6">
+  <CardHeader>
+    <CardTitle>Additional Charges</CardTitle>
+  </CardHeader>
+
+  <CardContent className="space-y-3">
+    {additionalCharges.map((charge, index) => (
+      <div key={index} className="grid grid-cols-12 gap-2 items-center">
+        <Input
+          className="col-span-6"
+          placeholder="Charge label (e.g. Installation)"
+          value={charge.label}
+          onChange={(e) =>
+            updateAdditionalCharge(index, "label", e.target.value)
+          }
+        />
+
+        <Input
+          type="number"
+          className="col-span-4"
+          placeholder="Amount"
+          value={charge.amount}
+          onChange={(e) =>
+            updateAdditionalCharge(index, "amount", e.target.value)
+          }
+        />
+
+        <Button
+          variant="destructive"
+          size="icon"
+          className="col-span-2"
+          onClick={() => removeAdditionalCharge(index)}
+          disabled={additionalCharges.length === 1}
+        >
+          ✕
+        </Button>
+      </div>
+    ))}
+
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={addAdditionalCharge}
+    >
+      + Add Charge
+    </Button>
+
+    <div className="flex justify-end text-sm font-semibold">
+      Additional Total: ₹{additionalTotal.toFixed(2)}
+    </div>
+  </CardContent>
+</Card>
+
+              </div>
+
+              {/* Sidebar */}
+              <div className="lg:col-span-1 space-y-6">
+                <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+                  <CardHeader className="border-b bg-muted/30">
+                    <CardTitle className="flex items-center gap-2">
+                      <ScanLine className="w-5 h-5 text-primary" />
+                      Scan Item
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-6 space-y-4">
+                    {showCamera && (
+                      <div className="relative mx-auto max-w-xs overflow-hidden rounded-lg border-2 border-primary aspect-square flex items-center justify-center bg-black">
+                        {cameraLoading && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                            <Loader2 className="w-8 h-8 animate-spin text-white" />
+                          </div>
+                        )}
+                        <div id="reader" className="w-full h-full"></div>
+                        <div className="absolute bottom-4 left-0 right-0 text-center pointer-events-none z-20">
+                          <p className="text-white text-xs bg-black/50 inline-block px-2 py-1 rounded">
+                            Align QR code inside the box
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button
+                        variant={scanMode === "camera" ? "default" : "outline"}
+                        onClick={() => {
+                          setScanMode("camera")
+                          setShowCamera(true)
+                          if (scannerRef.current && scannerRef.current.isScanning) {
+                            scannerRef.current.resume()
+                          }
+                        }}
+                        className="flex-1 rounded-lg"
+                        size="lg"
+                      >
+                        <Camera className="w-4 h-4 mr-2" /> Use Phone
+                      </Button>
+
+                      <Button
+                        variant={scanMode === "barcode" ? "default" : "outline"}
+                        onClick={() => {
+                          setScanMode("barcode")
+                          setShowCamera(false)
+                          setTimeout(() => skuInputRef.current?.focus(), 200)
+                        }}
+                        className="flex-1 rounded-lg"
+                        size="lg"
+                      >
+                        <ScanLine className="w-4 h-4 mr-2" /> Use Device
+                      </Button>
+                    </div>
+
+                    <div className="relative">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-card px-2 text-muted-foreground">OR SCAN SKU</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          ref={skuInputRef}
+                          placeholder="Scan or Enter SKU..."
+                          value={skuInput}
+                          onChange={(e) => setSkuInput(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleSkuScan(skuInput)}
+                          className="pl-10 h-11 bg-muted/50 border-muted-foreground/20 rounded-xl"
+                          disabled={scanMode === "camera"}
+                        />
+                      </div>
+                      <Button
+                        onClick={() => handleSkuScan(skuInput)}
+                        disabled={scanMode === "camera"}
+                        className="h-11 px-6 rounded-xl shadow-lg shadow-primary/20"
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+  <CardHeader className="border-b bg-muted/30">
+    <CardTitle className="flex items-center gap-2">
+      <ScanLine className="w-5 h-5 text-primary" />
+      Invoice Summary
+    </CardTitle>
+  </CardHeader>
+
+  <CardContent className="p-6 space-y-4">
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+      {/* DISCOUNT */}
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          Discount (₹)
+        </Label>
+
+        <Input
+          type="number"
+          value={discount}
+          onChange={(e) => setDiscount(Number(e.target.value))}
+          min="0"
+          className="h-11 rounded-xl"
+        />
+      </div>
+
+
+      {/* PAYMENT STATUS */}
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          Payment Status
+        </Label>
+
+        <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+  <SelectTrigger className="h-11 rounded-xl bg-[#0F172A] border border-[#2A3553] text-gray-200">
+    <SelectValue placeholder="Select status" />
+  </SelectTrigger>
+
+  <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+
+    <SelectItem 
+      value="pending" 
+      className="focus:bg-[#1A233A] hover:bg-[#1A233A]"
+    >
+      Pending
+    </SelectItem>
+
+    <SelectItem 
+      value="paid" 
+      className="focus:bg-[#1A233A] hover:bg-[#1A233A]"
+    >
+      Paid
+    </SelectItem>
+
+    <SelectItem 
+      value="partial" 
+      className="focus:bg-[#1A233A] hover:bg-[#1A233A]"
+    >
+      Partial
+    </SelectItem>
+
+  </SelectContent>
+</Select>
+      </div>
+
+
+      {/* PAYMENT MODE */}
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          Payment Mode
+        </Label>
+
+        <Select value={paymentMode} onValueChange={setPaymentMode}>
+  <SelectTrigger className="h-11 rounded-xl bg-[#0F172A] border border-[#2A3553] text-gray-200">
+    <SelectValue placeholder="Select mode" />
+  </SelectTrigger>
+
+  <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+
+    <SelectItem
+      value="cash"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      Cash
+    </SelectItem>
+
+    <SelectItem
+      value="bank"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      Bank
+    </SelectItem>
+
+    <SelectItem
+      value="upi"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      UPI
+    </SelectItem>
+
+    <SelectItem
+      value="card"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      Card
+    </SelectItem>
+
+  </SelectContent>
+</Select>
+      </div>
+
+
+      {/* PAID AMOUNT FOR PARTIAL */}
+      {paymentStatus === "partial" && (
+        <div>
+          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+            Paid Amount
+          </Label>
+
+          <Input
+            type="number"
+            min="0"
+            value={paidAmount}
+            onChange={(e) => setPaidAmount(Number(e.target.value))}
+            className="h-11 rounded-xl"
+          />
+        </div>
+      )}
+
+    </div>
+
+
+    {/* GST SWITCH */}
+    <div className="flex items-center justify-between gap-3">
+      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Apply GST
+      </Label>
+
+      <input
+        type="checkbox"
+        checked={gstEnabled}
+        onChange={(e) => setGstEnabled(e.target.checked)}
+        className="w-5 h-5 accent-primary cursor-pointer"
+      />
+    </div>
+
+
+    {/* GST RATE */}
+    {gstEnabled && (
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          GST Percentage (%)
+        </Label>
+
+        <Input
+          type="number"
+          min="0"
+          max="28"
+          step="0.1"
+          value={gstRate}
+          onChange={(e) => setGstRate(Number(e.target.value))}
+          className="h-11 rounded-xl"
+        />
+      </div>
+    )}
+
+
+    {/* TOTALS */}
+    <div className="border-t pt-4 space-y-2 text-sm">
+
+      <div className="flex justify-between text-muted-foreground">
+        <span>Subtotal:</span>
+        <span className="font-medium text-foreground">
+          ₹{formatCurrency(subtotal)}
+        </span>
+      </div>
+
+
+      {additionalCharges
+        .filter((c) => Number(c.amount) > 0)
+        .map((c, i) => (
+          <div key={i} className="flex justify-between text-muted-foreground">
+            <span>{c.label || "Additional Charge"}:</span>
+            <span className="font-medium text-foreground">
+              ₹{formatCurrency(c.amount)}
+            </span>
+          </div>
+        ))}
+
+
+      <div className="flex justify-between text-muted-foreground">
+        <span>GST Amount:</span>
+        <span className="font-medium text-foreground">
+          ₹{formatCurrency(gstAmount)}
+        </span>
+      </div>
+
+
+      <div className="flex justify-between text-muted-foreground">
+        <span>Discount:</span>
+        <span className="font-medium text-foreground">
+          -₹{formatCurrency(discount)}
+        </span>
+      </div>
+
+
+      <div className="flex justify-between font-bold text-base border-t pt-3 mt-2">
+        <span>Total:</span>
+        <span>₹{formatCurrency(total)}</span>
+      </div>
+
+
+      {/* SHOW BALANCE */}
+      {paymentStatus === "partial" && (
+        <div className="flex justify-between text-red-500 font-semibold">
+          <span>Balance:</span>
+          <span>₹{formatCurrency(total - paidAmount)}</span>
+        </div>
+      )}
+
+    </div>
+
+
+    {/* ACTION BUTTONS */}
+    <div className="flex gap-3">
+
+      <Button
+        variant="destructive"
+        size="sm"
+        className="h-11 rounded-xl"
+        onClick={resetForm}
+      >
+        Reset Invoice
+      </Button>
+
+
+      <Button
+        variant="outline"
+        className="flex-1 h-11 rounded-xl"
+        onClick={() => handleSaveDraft(false)}
+      >
+        Save Draft
+      </Button>
+
+    </div>
+
+
+    <Button
+      disabled={creatingInvoice}
+      className="w-full h-12 rounded-xl shadow-lg shadow-primary/20"
+      onClick={handleCreateInvoice}
+    >
+      {creatingInvoice
+        ? "Creating..."
+        : draftId
+        ? "Finalize Invoice"
+        : "Create Invoice"}
+    </Button>
+
+  </CardContent>
+</Card>
+
+              </div>
+            </div>
+          )}
+{activeTab === "drafts" && (
+  <Card>
+    <CardHeader>
+      <CardTitle>Draft Invoices</CardTitle>
+    </CardHeader>
+
+    <CardContent>
+      {drafts.length === 0 ? (
+        <p className="text-muted-foreground text-sm">No drafts found</p>
+      ) : (
+        <div className="space-y-3">
+          {drafts.map((d) => (
+            <div
+              key={d.id}
+              className="flex justify-between items-center border p-3 rounded-lg hover:bg-muted"
+            >
+              {/* 🟢 LEFT SIDE → OPEN DRAFT */}
+              <div
+                className="cursor-pointer"
+                onClick={async () => {
+                  try {
+                    const res = await axios.get(
+                      `${API}/invoices/draft/${d.id}`
+                    )
+                    loadDraft(res.data)
+                  } catch (err) {
+                    toast.error("Failed to load draft")
+                  }
+                }}
+              >
+                <p className="font-mono text-sm">{d.draft_number}</p>
+                <p className="text-xs text-muted-foreground">
+                  {d.customer_name} • ₹{formatCurrency(d.total || 0)}
+                </p>
+              </div>
+
+              {/* 🔴 RIGHT SIDE → ACTIONS */}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    try {
+                      const res = await axios.get(
+                        `${API}/invoices/draft/${d.id}`
+                      )
+                      loadDraft(res.data)
+                    } catch (err) {
+                      toast.error("Failed to load draft")
+                    }
+                  }}
+                >
+                  Open
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleDeleteDraft(d.id)
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </CardContent>
+  </Card>
+)}
+
+
+          {activeTab === "list" && (
+            <div className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by invoice number, customer name, or phone..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9 h-11 rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+             <Select
+  value={statusFilter}
+  onValueChange={(v) => {
+    setPage(1)
+    setStatusFilter(v)
+  }}
+>
+  <SelectTrigger className="h-11 rounded-xl text-xs sm:text-sm">
+    <SelectValue placeholder="Filter by Status" />
+  </SelectTrigger>
+
+  <SelectContent>
+    <SelectItem value="all">
+      All Status
+    </SelectItem>
+
+    <SelectItem value="paid">
+      ✓ Paid
+    </SelectItem>
+
+    <SelectItem value="pending">
+      ⏳ Pending
+    </SelectItem>
+
+    <SelectItem value="partial">
+      ⚠ Partial
+    </SelectItem>
+
+    <SelectItem value="cancelled">
+      ✕ Cancelled
+    </SelectItem>
+  </SelectContent>
+</Select>
+
+              <Select
+  value={rangeFilter}
+  onValueChange={(v) => {
+    setPage(1)
+    setRangeFilter(v)
+  }}
+>
+  <SelectTrigger className="h-11 rounded-xl text-xs sm:text-sm">
+    <SelectValue placeholder="Date Range" />
+  </SelectTrigger>
+
+  <SelectContent>
+    <SelectItem value="today">
+      Today
+    </SelectItem>
+
+    <SelectItem value="last10">
+      Last 10 Days
+    </SelectItem>
+
+    <SelectItem value="last30">
+      Last 30 Days
+    </SelectItem>
+  </SelectContent>
+</Select>
+
+                <Input
+                  type="month"
+                  value={monthFilter}
+                  onChange={(e) => {
+                    setPage(1)
+                    setMonthFilter(e.target.value)
+                  }}
+                  className="h-11 rounded-xl text-xs sm:text-sm"
+                  placeholder="Select Month"
+                />
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base sm:text-lg md:text-xl">All Invoices ({filteredInvoices.length})</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {/* Mobile - Card View */}
+                  <div className="md:hidden space-y-3">
+                    {filteredInvoices.filter((inv) => inv && inv.id).map((inv) => (
+                      <div key={inv.id} className="p-3 border rounded-lg bg-card hover:bg-muted/50 transition-colors space-y-2">
+                        {/* Header Row */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1">
+                            <p className="text-xs sm:text-sm font-mono font-semibold">{inv.invoice_number}</p>
+                            <p className="text-xs text-muted-foreground">{new Date(inv.created_at).toLocaleDateString()}</p>
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded whitespace-nowrap font-semibold ${
+                            inv.payment_status === "paid" ? "bg-green-100 text-green-700" :
+                            inv.payment_status === "partial" ? "bg-yellow-100 text-yellow-700" :
+                            "bg-red-100 text-red-700"
+                          }`}>
+                            {inv.payment_status.toUpperCase()}
+                          </span>
+                        </div>
+
+                        {/* Customer Info */}
+                        <div>
+                          <p className="text-xs text-muted-foreground">Customer</p>
+                          <p className="text-sm font-medium">{inv.customer_name}</p>
+                          {inv.customer_phone && (
+                            <p className="text-xs text-muted-foreground">{inv.customer_phone}</p>
+                          )}
+                        </div>
+
+                        {/* Amount */}
+                        <div className="bg-muted/50 p-2 rounded">
+                          <p className="text-xs text-muted-foreground">Total</p>
+                          <p className="text-sm font-bold">₹{formatCurrency(inv.total)}</p>
+                          
+                          {/* Paid Amount */}
+                          {inv.paid_amount > 0 && inv.payment_status !== "pending" && (
+                            <p className="text-xs text-green-600 font-medium mt-1">
+                              ✓ Paid: ₹{formatCurrency(inv.paid_amount)}
+                            </p>
+                          )}
+
+                          {/* Balance */}
+                          {inv.payment_status === "partial" && inv.balance_amount > 0 && (
+                            <p className="text-xs text-red-600 font-medium mt-1">
+                              ⚠ Balance: ₹{formatCurrency(inv.balance_amount)}
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Actions */}
+                        <div className="grid grid-cols-3 gap-2 pt-2">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={() => { setViewInvoice(inv); setOpen(true) }}
+                            className="h-10 text-xs sm:text-sm"
+                            title="View Details"
+                          >
+                            View
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={() => generatePDF(inv)}
+                            className="h-10 text-xs sm:text-sm"
+                            title="Download PDF"
+                          >
+                            PDF
+                          </Button>
+                          {(inv.payment_status === "partial" || inv.payment_status === "pending") && inv.balance_amount > 0 && (
+                            <Button 
+                              size="sm" 
+                              onClick={() => addPayment(inv)}
+                              className="h-10 text-xs sm:text-sm"
+                              title="Add Payment"
+                            >
+                              Pay
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Desktop - Table View */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="border-b text-sm text-muted-foreground">
+                          <th className="p-3 text-left">Invoice #</th>
+                          <th className="p-3 text-left">Date</th>
+                          <th className="p-3 text-left">Created By</th>
+
+                          <th className="p-3 text-left">Customer</th>
+                          <th className="p-3 text-left">Phone</th>
+                          <th className="p-3 text-right">Total</th>
+                          <th className="p-3 text-left">Status</th>
+                          <th className="p-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredInvoices
+                          .filter((inv) => inv && inv.id)
+                          .map((inv) => (
+                            <tr key={inv.id} className="border-b hover:bg-muted/40 transition-colors">
+                              <td className="p-3 font-mono text-sm">{inv.invoice_number}</td>
+                              <td className="p-3 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
+                              <td className="p-3 text-sm">
+    {inv.created_by || "—"}
+  </td>
+
+                              <td className="p-3 font-medium">{inv.customer_name}</td>
+                              <td className="p-3 text-sm">{inv.customer_phone || "N/A"}</td>
+                             <td className="p-3 text-right font-semibold">
+  ₹{formatCurrency(inv.total)}
+
+  {/* SHOW PAID AMOUNT ONLY IF NOT FULLY PAID AND NOT PENDING */}
+  {inv.paid_amount > 0 && inv.payment_status !== "pending" && (
+    <div className="text-xs text-green-600 font-medium">
+      Paid: ₹{formatCurrency(inv.paid_amount)}
+    </div>
+  )}
+
+  {/* SHOW BALANCE ONLY IF PARTIAL STATUS */}
+  {inv.payment_status === "partial" && inv.balance_amount > 0 && (
+    <div className="text-xs text-red-500 font-medium">
+      Balance: ₹{formatCurrency(inv.balance_amount)}
+    </div>
+  )}
+
+  {/* ADD PAYMENT BUTTON - ONLY FOR PARTIAL & PENDING */}
+  {(inv.payment_status === "partial" || inv.payment_status === "pending") && inv.balance_amount > 0 && (
+    <Button
+      size="sm"
+      className="mt-1"
+      onClick={() => addPayment(inv)}
+    >
+      Add Payment
+    </Button>
+  )}
+</td>
+                              <td className="p-3">
+                                <Select
+                                  value={inv.payment_status || "pending"}
+                                  onValueChange={(v) => {
+                                    updateInvoiceStatus(inv.id, v)
+                                    setInvoices((prev) =>
+                                      prev.map((i) => (i.id === inv.id ? { ...i, payment_status: v } : i)),
+                                    )
+                                  }}
+                                >
+                                  <SelectTrigger className="w-36 bg-[#0F172A] text-gray-200 border border-[#2A3553] rounded-lg">
+                                    <SelectValue placeholder="Status" />
+                                  </SelectTrigger>
+
+                                  <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+                                    <SelectItem value="pending" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                      Pending
+                                    </SelectItem>
+                                    <SelectItem value="paid" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                      Paid
+                                    </SelectItem>
+                                    <SelectItem value="partial" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                      Partial
+                                    </SelectItem>
+                                    <SelectItem value="cancelled" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                      Cancelled
+                                    </SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </td>
+
+                              <td className="p-3 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setViewInvoice(inv)}
+                                    className="rounded-lg"
+                                  >
+                                    <Eye className="w-4 h-4 mr-1" /> View
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => generatePDF(inv)}
+                                    className="rounded-lg"
+                                  >
+                                    <Download className="w-4 h-4 mr-1" /> PDF
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => shareInvoice(inv)}
+                                    className="rounded-lg"
+                                  >
+                                    <Share2 className="w-4 h-4 mr-1" /> Share
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile */}
+                  <div className="md:hidden space-y-3">
+                    {filteredInvoices
+                      .filter((inv) => inv && inv.id)
+                      .map((inv) => (
+                        <Card key={inv.id} className="border shadow-sm hover:shadow-md transition-shadow rounded-xl">
+                          <CardContent className="p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-1 min-w-0 flex-1">
+                                <p className="font-mono text-sm font-semibold truncate">{inv.invoice_number}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(inv.created_at).toLocaleDateString()}
+                                </p>
+                              </div>
+                              <div className="text-right shrink-0">
+                         <p className="text-lg font-bold">
+  ₹{formatCurrency(getInvoiceTotal(inv))}
+</p>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1 border-t pt-3">
+                              <p className="font-medium text-sm">{inv.customer_name}</p>
+                              <p className="text-xs text-muted-foreground">{inv.customer_phone || "N/A"}</p>
+                            </div>
+
+                            <div className="space-y-2 border-t pt-3">
+                              <Label className="text-xs font-medium uppercase tracking-wider text-muted-foreground block">
+                                Payment Status
+                              </Label>
+                              <Select
+                                value={inv.payment_status || "pending"}
+                                onValueChange={(v) => {
+                                  updateInvoiceStatus(inv.id, v)
+                                  setInvoices((prev) =>
+                                    prev.map((i) => (i.id === inv.id ? { ...i, payment_status: v } : i)),
+                                  )
+                                }}
+                              >
+                                <SelectTrigger className="rounded-lg">
+                                  <SelectValue placeholder="Status" />
+                                </SelectTrigger>
+
+                                <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+                                  <SelectItem value="pending" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    Pending
+                                  </SelectItem>
+                                  <SelectItem value="paid" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    Paid
+                                  </SelectItem>
+                                  <SelectItem value="overdue" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    Overdue
+                                  </SelectItem>
+                                  <SelectItem value="cancelled" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    Cancelled
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="flex gap-2 pt-2 border-t">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setViewInvoice(inv)}
+                                className="flex-1 rounded-lg"
+                              >
+                                <Eye className="w-4 h-4 mr-2" /> View
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => generatePDF(inv)}
+                                className="flex-1 rounded-lg"
+                              >
+                                <Download className="w-4 h-4 mr-2" /> PDF
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => shareInvoice(inv)}
+                                className="flex-1 rounded-lg"
+                              >
+                                <Share2 className="w-4 h-4 mr-2" /> Share
+                              </Button>
+                            </div>
+                          </CardContent>
+
+                        </Card>
+                        
+                      ))}
+
+                  </div>
+
+                  {filteredInvoices.length === 0 && (
+                    <div className="py-12 text-center text-muted-foreground">
+                      <FileText className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                      <p className="text-sm">No invoices found</p>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row justify-between items-center gap-3 mt-6 pt-4 border-t">
+                    <Button
+                      variant="outline"
+                      disabled={page === 1}
+                      onClick={() => setPage(page - 1)}
+                      className="w-full sm:w-auto rounded-lg"
+                      size="sm"
+                    >
+                      Previous
+                    </Button>
+
+                    <span className="text-sm font-medium">
+                      Page {pagination.page} of {pagination.total_pages}
+                    </span>
+
+                    <Button
+                      variant="outline"
+                      disabled={page === pagination.total_pages}
+                      onClick={() => setPage(page + 1)}
+                      className="w-full sm:w-auto rounded-lg"
+                      size="sm"
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {viewInvoice && (
+            <Dialog open={!!viewInvoice} onOpenChange={() => setViewInvoice(null)}>
+              <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto rounded-3xl p-0">
+                <DialogHeader className="bg-primary p-6 text-primary-foreground">
+                  <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                    <FileText className="w-5 h-5" /> Invoice Details
+                  </DialogTitle>
+                  <p className="text-primary-foreground/80 text-sm mt-1">Invoice #{viewInvoice.invoice_number}</p>
+                </DialogHeader>
+                <div className="p-6 space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Customer Name</p>
+                      <p className="font-medium mt-1 text-base">{viewInvoice.customer_name}</p>
+                    </div>
+                            <div>
+                              <Label className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">
+                                Payment Status
+                              </Label>
+                              <Select
+                                value={viewInvoice.payment_status}
+                                onValueChange={(v) => {
+                                  // If marking as paid, open payment mode dialog first
+                                  if (v === "paid") {
+                                    handleMarkAsPaid(viewInvoice.id)
+                                  } else {
+                                    // For other statuses, update directly
+                                    const inv = {...viewInvoice, payment_status: v}
+                                    setViewInvoice(inv)
+                                    updateInvoiceStatus(viewInvoice.id, v)
+                                  }
+                                }}
+                              >
+                                <SelectTrigger className="h-10 rounded-lg mt-1">
+                                  <SelectValue />
+                                </SelectTrigger>
+
+                                <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+                                  <SelectItem value="pending" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    ⏳ Pending
+                                  </SelectItem>
+                                  <SelectItem value="paid" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    ✓ Paid
+                                  </SelectItem>
+                                  <SelectItem value="partial" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    ⚠ Partial
+                                  </SelectItem>
+                                  <SelectItem value="cancelled" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">
+                                    ✕ Cancelled
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                    <div>
+    <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">
+      Created By
+    </p>
+    <p className="font-medium mt-1 text-base">
+      {viewInvoice.created_by || "—"}
+    </p>
+  </div>
+
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Date</p>
+                      <p className="font-medium mt-1 text-base">{new Date(viewInvoice.created_at).toLocaleDateString()}</p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Payment Status</p>
+                      <p className="font-medium mt-1 capitalize text-base">{viewInvoice.payment_status}</p>
+                      <div>
+  <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">
+    Payment Mode
+  </p>
+  <p className="font-medium mt-1 capitalize text-base">
+    {viewInvoice.payment_mode || "—"}
+  </p>
+</div>
+                    </div>
+                  </div>
+
+                  <div className="border rounded-lg p-4">
+                    <h4 className="font-bold mb-3 text-sm uppercase tracking-wider text-muted-foreground">Items</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-muted-foreground text-xs uppercase tracking-wider">
+                            <th className="p-2 text-left">Product</th>
+                            <th className="p-2 text-right">Qty</th>
+                            <th className="p-2 text-right">Price</th>
+                            <th className="p-2 text-right">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {viewInvoice.items.map((item, idx) => (
+                            <tr key={idx} className="border-b">
+                              <td className="p-2 align-top">
+                                <div className="font-medium">{item.product_name}</div>
+                                {(item.color || item.size || item.v_sku || item.variant_info) && (
+                                  <div className="text-[10px] text-muted-foreground flex flex-wrap gap-x-2 mt-0.5">
+                                    {(item.color || item.variant_info?.color) && (
+                                      <span>Color: {item.color || item.variant_info.color}</span>
+                                    )}
+                                    {(item.size || item.variant_info?.size) && (
+                                      <span>Size: {item.size || item.variant_info.size}</span>
+                                    )}
+                                    {(item.v_sku || item.sku || item.variant_info?.v_sku) && (
+                                      <span className="font-mono bg-muted px-1 rounded">
+                                        SKU: {item.v_sku || item.sku || item.variant_info?.v_sku}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="text-right p-2 align-top">{item.quantity}</td>
+                              <td className="text-right p-2 align-top">₹{formatCurrency(item.price)}</td>
+                              <td className="text-right p-2 align-top font-semibold">₹{formatCurrency(item.total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="mt-4 space-y-2 text-sm">
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Subtotal:</span>
+                        <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.subtotal)}</span>
+                      </div>
+                      {Array.isArray(viewInvoice.additional_charges) &&
+  viewInvoice.additional_charges
+    .filter((c) => Number(c.amount) > 0)
+    .map((c, i) => (
+      <div key={i} className="flex justify-between text-muted-foreground">
+        <span>{c.label || "Additional Charge"}:</span>
+        <span className="font-medium text-foreground">
+          ₹{formatCurrency(c.amount)}
+        </span>
+      </div>
+    ))}
+
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>GST:</span>
+                        <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.gst_amount)}</span>
+                      </div>
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Discount:</span>
+                        <span className="font-medium text-foreground">-₹{formatCurrency(viewInvoice.discount)}</span>
+                      </div>
+                      <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
+                        <span>Total:</span>
+                        <span>₹{formatCurrency(viewInvoice.total)}</span>
+
+                      </div>
+                      {/* PAID AMOUNT - SHOW ONLY FOR PAID/PARTIAL STATUS */}
+{viewInvoice.payment_status === "paid" && (
+  <div className="flex justify-between text-green-600 font-medium">
+    <span>Status:</span>
+    <span className="font-bold">✓ FULLY PAID</span>
+  </div>
+)}
+
+{/* PARTIAL PAYMENT DETAILS */}
+{viewInvoice.payment_status === "partial" && (
+  <>
+    <div className="flex justify-between text-green-600 font-medium">
+      <span>Paid Amount:</span>
+      <span>₹{formatCurrency(viewInvoice.paid_amount || 0)}</span>
+    </div>
+    <div className="flex justify-between text-red-500 font-semibold">
+      <span>Balance Remaining:</span>
+      <span>₹{formatCurrency(viewInvoice.balance_amount || 0)}</span>
+    </div>
+  </>
+)}
+                    </div>
+                  </div>
+
+                  <Button
+                    className="w-full h-12 rounded-xl shadow-lg shadow-primary/20"
+                    onClick={() => generatePDF(viewInvoice)}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Download PDF
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
+
+          <Dialog open={showVariantDialog} onOpenChange={setShowVariantDialog}>
+            <DialogContent onKeyDown={handleVariantKeyDown}
+  tabIndex={0}
+  className="sm:max-w-[550px] rounded-3xl overflow-hidden p-0 border-none shadow-2xl max-h-[90vh] flex flex-col">
+              <DialogHeader className="bg-primary p-6 text-primary-foreground flex-shrink-0">
+                <DialogTitle className="text-xl font-bold flex items-center gap-2">Select Variant</DialogTitle>
+                <p className="text-primary-foreground/80 text-sm mt-1">
+                  {selectedProductForVariant?.name} - Choose your option
+                </p>
+              </DialogHeader>
+
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="space-y-3">
+                  {selectedProductForVariant?.variants?.map((variant, index) => (
+                    <button
+ key={variant.v_sku}
+  id={`variant-${index}`}
+                        onMouseDown={(e) => {
+  e.preventDefault()
+  addSelectedProductToInvoice(selectedProductForVariant, variant)
+}}
+className={`w-full flex items-center gap-4 p-4 rounded-2xl border transition-all text-left group
+${
+  selectedVariantIndex === index
+    ? "border-primary bg-primary/10 shadow-lg"
+    : "bg-card hover:bg-primary/5 hover:border-primary hover:shadow-lg"
+}`}                    >
+                      <div className="w-16 h-16 rounded-xl bg-muted border overflow-hidden flex-shrink-0">
+                        <img
+                          src={
+                            variant.image_url ||
+                            variant.v_image_url ||
+                            selectedProductForVariant.images?.[0] ||
+                            "/placeholder.png"
+                          }
+                          alt={variant.variant_name || "variant"}
+                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm line-clamp-1">
+                          {selectedProductForVariant.name}
+                        </p>
+                        <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                          <p className="font-mono bg-muted/50 inline-block px-2 py-0.5 rounded">{variant.v_sku}</p>
+                          {variant.variant_name && (
+                            <p>Variant: <span className="font-medium text-foreground">{variant.variant_name}</span></p>
+                          )}
+                          {variant.color && (
+                            <p>Color: <span className="font-medium text-foreground">{variant.color}</span></p>
+                          )}
+                          {variant.size && (
+                            <p>Size: <span className="font-medium text-foreground">{variant.size}</span></p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 mt-2">
+                          <span className="text-primary font-bold text-sm">
+                            ₹{variant.v_selling_price || selectedProductForVariant.selling_price}
+                          </span>
+                          {variant.stock && (
+                            <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                              Stock: {variant.stock}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors flex-shrink-0">
+                        <Plus className="w-4 h-4" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <DialogFooter className="p-4 bg-muted/30 border-t flex justify-end flex-shrink-0">
+                <Button variant="ghost" onClick={() => setShowVariantDialog(false)} className="rounded-xl">
+                  Cancel
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={showManualDialog} onOpenChange={setShowManualDialog}>
+  <DialogContent className="rounded-2xl">
+    <DialogHeader>
+      <DialogTitle>Add Manual Item</DialogTitle>
+    </DialogHeader>
+
+    <div className="space-y-4">
+      <div>
+        <Label>Item Name</Label>
+        <Input
+          placeholder="Enter item name"
+          value={manualItem.name}
+          onChange={(e) =>
+            setManualItem({ ...manualItem, name: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <Label>Price (₹)</Label>
+        <Input
+          type="number"
+          placeholder="Enter price"
+          value={manualItem.price}
+          onChange={(e) =>
+            setManualItem({ ...manualItem, price: e.target.value })
+          }
+        />
+      </div>
+
+      <div>
+        <Label>Quantity</Label>
+        <Input
+          type="number"
+          min="1"
+          value={manualItem.quantity}
+          onChange={(e) =>
+            setManualItem({ ...manualItem, quantity: e.target.value })
+          }
+        />
+      </div>
+    </div>
+
+    <DialogFooter>
+      <Button
+        variant="outline"
+        onClick={() => setShowManualDialog(false)}
+      >
+        Cancel
+      </Button>
+
+      <Button onClick={addManualItemToInvoice}>
+        Add Item
+      </Button>
+      </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+{/* ✅ NEW: PAYMENT MODE DIALOG (for marking as paid) */}
+<Dialog open={isPaidModeDialogOpen} onOpenChange={setIsPaidModeDialogOpen}>
+  <DialogContent className="w-full sm:max-w-md rounded-2xl p-4 sm:p-6">
+    <DialogHeader>
+      <DialogTitle className="text-lg sm:text-xl">
+        Mark Invoice as Paid
+      </DialogTitle>
+      <p className="text-xs sm:text-sm text-muted-foreground mt-2">
+        How was the payment received?
+      </p>
+    </DialogHeader>
+
+    <div className="space-y-4 py-4">
+      {/* PAYMENT MODE */}
+      <div>
+        <Label className="text-sm font-semibold mb-2 block">Payment Mode</Label>
+        <Select value={paidPaymentMode} onValueChange={setPaidPaymentMode}>
+          <SelectTrigger className="h-12 sm:h-11">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="cash">💵 Cash</SelectItem>
+            <SelectItem value="upi">📱 UPI</SelectItem>
+            <SelectItem value="bank">🏦 Bank Transfer</SelectItem>
+            <SelectItem value="cheque">📋 Cheque</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* DYNAMIC REFERENCE FIELD */}
+      {paidPaymentMode === "upi" && (
+        <div>
+          <Label className="text-sm font-semibold mb-2 block">UPI ID</Label>
+          <Input
+            placeholder="e.g., user@upi"
+            value={paidPaymentRef}
+            onChange={(e) => setPaidPaymentRef(e.target.value)}
+            className="h-12 sm:h-11"
+          />
+        </div>
+      )}
+
+      {paidPaymentMode === "bank" && (
+        <div>
+          <Label className="text-sm font-semibold mb-2 block">Transaction ID</Label>
+          <Input
+            placeholder="e.g., TXN-123456"
+            value={paidPaymentRef}
+            onChange={(e) => setPaidPaymentRef(e.target.value)}
+            className="h-12 sm:h-11"
+          />
+        </div>
+      )}
+
+      {paidPaymentMode === "cheque" && (
+        <div>
+          <Label className="text-sm font-semibold mb-2 block">Cheque Number</Label>
+          <Input
+            placeholder="e.g., CHQ-001234"
+            value={paidPaymentRef}
+            onChange={(e) => setPaidPaymentRef(e.target.value)}
+            className="h-12 sm:h-11"
+          />
+        </div>
+      )}
+    </div>
+
+    <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 pt-4 border-t">
+      <Button
+        variant="outline"
+        onClick={() => setIsPaidModeDialogOpen(false)}
+        className="w-full sm:w-auto h-11 rounded-xl"
+      >
+        Cancel
+      </Button>
+      <Button
+        onClick={confirmMarkAsPaid}
+        className="w-full sm:w-auto h-11 rounded-xl"
+      >
+        Confirm Paid
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+{/* ✅ NEW: PAYMENT MODAL - MOBILE OPTIMIZED */}
+<Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
+  <DialogContent className="w-full sm:max-w-xl md:max-w-2xl rounded-2xl max-h-[95vh] overflow-y-auto p-4 sm:p-6">
+    <DialogHeader className="mb-4">
+      <DialogTitle className="text-lg sm:text-xl">
+        Add Payment - {viewInvoice?.invoice_number}
+      </DialogTitle>
+      <p className="text-xs sm:text-sm text-muted-foreground mt-3 space-y-1">
+        <div>Total: ₹{formatCurrency(viewInvoice?.total || 0)}</div>
+        <div>Paid: ₹{formatCurrency(viewInvoice?.paid_amount || 0)}</div>
+        <div className="font-semibold">Balance: ₹{formatCurrency(viewInvoice?.balance_amount || 0)}</div>
+      </p>
+    </DialogHeader>
+
+    <div className="space-y-4 sm:space-y-5 py-4">
+      {/* PAYMENT AMOUNT - MOBILE OPTIMIZED */}
+      <div>
+        <Label className="text-sm sm:text-base font-semibold mb-2 block">Payment Amount (₹)</Label>
+        <Input
+          type="number"
+          placeholder={`Max: ₹${formatCurrency(viewInvoice?.balance_amount || 0)}`}
+          value={paymentAmount}
+          onChange={(e) => setPaymentAmount(e.target.value)}
+          className="w-full text-base sm:text-lg font-bold h-14 sm:h-12"
+        />
+      </div>
+
+      {/* PAYMENT MODE - MOBILE OPTIMIZED */}
+      <div>
+        <Label className="text-sm sm:text-base font-semibold mb-2 block">Payment Mode</Label>
+        <Select value={paymentModeSelected} onValueChange={setPaymentModeSelected}>
+          <SelectTrigger className="w-full h-14 sm:h-12">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="cash">💵 Cash</SelectItem>
+            <SelectItem value="upi">📱 UPI</SelectItem>
+            <SelectItem value="bank">🏦 Bank Transfer</SelectItem>
+            <SelectItem value="cheque">📋 Cheque</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* PAYMENT REFERENCE - MOBILE OPTIMIZED */}
+      {paymentModeSelected === "upi" && (
+        <div>
+          <Label className="text-sm sm:text-base font-semibold mb-2 block">UPI ID</Label>
+          <Input
+            placeholder="e.g., user@upi"
+            value={paymentReference}
+            onChange={(e) => setPaymentReference(e.target.value)}
+            className="w-full h-14 sm:h-11"
+          />
+        </div>
+      )}
+
+      {paymentModeSelected === "bank" && (
+        <div>
+          <Label className="text-sm sm:text-base font-semibold mb-2 block">Transaction ID</Label>
+          <Input
+            placeholder="e.g., TXN-123456"
+            value={paymentReference}
+            onChange={(e) => setPaymentReference(e.target.value)}
+            className="w-full h-14 sm:h-11"
+          />
+        </div>
+      )}
+
+      {paymentModeSelected === "cheque" && (
+        <div>
+          <Label className="text-sm sm:text-base font-semibold mb-2 block">Cheque Number</Label>
+          <Input
+            placeholder="e.g., CHQ-001234"
+            value={paymentReference}
+            onChange={(e) => setPaymentReference(e.target.value)}
+            className="w-full h-14 sm:h-11"
+          />
+        </div>
+      )}
+
+      {/* PAYMENT HISTORY - MOBILE OPTIMIZED */}
+      {paymentHistory.length > 0 && (
+        <div className="border-t pt-4 sm:pt-6">
+          <h3 className="font-semibold text-sm sm:text-base mb-3">Payment History</h3>
+          <div className="space-y-2 sm:space-y-3 max-h-40 sm:max-h-48 overflow-y-auto">
+            {paymentHistory.map((payment) => (
+              <div key={payment.id} className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-muted/50 border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs sm:text-sm font-semibold truncate">
+                    ₹{formatCurrency(payment.amount)} via {payment.payment_mode.toUpperCase()}
+                  </p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">
+                    {new Date(payment.created_at).toLocaleDateString('en-IN', {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                  {payment.reference && (
+                    <p className="text-[10px] sm:text-xs text-muted-foreground font-mono mt-1 truncate">
+                      {payment.reference}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDeletePayment(payment.id)}
+                  className="text-destructive hover:bg-destructive/10 flex-shrink-0 h-10 sm:h-9 w-10 sm:w-9"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+
+    <DialogFooter className="pt-4 sm:pt-6 border-t gap-2 flex flex-col-reverse sm:flex-row mt-4">
+      <Button
+        variant="outline"
+        onClick={() => setIsPaymentModalOpen(false)}
+        className="w-full sm:w-auto rounded-xl h-12 sm:h-10 text-base sm:text-sm"
+      >
+        Cancel
+      </Button>
+      <Button
+        onClick={handleAddPayment}
+        disabled={!paymentAmount || viewInvoice?.payment_status === "paid"}
+        className="w-full sm:w-auto rounded-xl h-12 sm:h-10 text-base sm:text-sm"
+      >
+        Add Payment
+      </Button> 
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+
+        </div>
+      )
+    }
+

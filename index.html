@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>R RIDE Invoice</title>
+
+<style>
+body{
+font-family:Arial,sans-serif;
+background:#ececec;
+padding:20px;
+}
+
+.invoice{
+width:900px;
+margin:auto;
+background:#fff;
+padding:35px;
+border:1px solid #ccc;
+}
+
+.header{
+text-align:center;
+}
+
+.header h1{
+font-size:52px;
+margin:0;
+}
+
+.header h3{
+margin:8px 0;
+font-size:28px;
+}
+
+.header p{
+font-size:15px;
+line-height:1.5;
+}
+
+.line{
+border-top:4px solid #000;
+margin:28px 0;
+}
+
+.top{
+display:flex;
+justify-content:space-between;
+margin-bottom:35px;
+}
+
+.box{
+width:45%;
+}
+
+.title{
+font-size:28px;
+font-weight:bold;
+margin-bottom:15px;
+}
+
+.info{
+font-size:22px;
+line-height:1.8;
+}
+
+table{
+width:100%;
+border-collapse:collapse;
+margin-top:20px;
+}
+
+th{
+background:#f4f4f4;
+padding:12px;
+font-size:20px;
+border:1px solid #ccc;
+}
+
+td{
+padding:12px;
+font-size:18px;
+border:1px solid #ccc;
+}
+
+.summary{
+width:420px;
+margin-left:auto;
+margin-top:25px;
+}
+
+.summary td{
+font-size:22px;
+}
+
+.green{
+color:green;
+font-weight:bold;
+}
+
+.red{
+color:red;
+font-weight:bold;
+}
+
+.bold{
+font-weight:bold;
+font-size:24px;
+}
+
+.terms{
+margin-top:35px;
+font-size:15px;
+}
+
+.sign{
+display:flex;
+justify-content:space-between;
+margin-top:90px;
+}
+
+.sig{
+width:230px;
+border-top:2px solid black;
+text-align:center;
+padding-top:8px;
+font-size:20px;
+}
+
+button{
+margin-top:30px;
+width:100%;
+padding:18px;
+font-size:22px;
+background:black;
+color:white;
+border:none;
+cursor:pointer;
+}
+
+@media print{
+button{display:none;}
+}
+</style>
+
+</head>
+<body>
+
+<div class="invoice">
+
+<div class="header">
+<h1>R RIDE</h1>
+<h3>BIKE GARAGE & STUDIO</h3>
+
+<p>
+Mahaveer Building, Gala no 09, Near Payal Talkies,<br>
+Mandai Road, Dhamankar Naka, Bhiwandi 421305<br>
+Phone: +91 90822582580
+</p>
+
+</div>
+
+<div class="line"></div>
+
+
+<div class="top">
+
+<div class="box">
+<div class="title">INVOICE TO</div>
+
+<div class="info">
+<b>Nandish</b><br>
+8482857761<br>
+N/A
+</div>
+
+</div>
+
+
+<div class="box" style="text-align:right">
+<div class="title">INVOICE DETAILS</div>
+
+<div class="info">
+<b>Created By:</b> Amankumar <br>
+<b>Invoice No:</b> INV-26-27-0116<br>
+<b>Date:</b> 22/04/2026 <br>
+<b>Status:</b> PAID
+</div>
+
+</div>
+
+</div>
+
+
+
+<table>
+
+<tr>
+<th>#</th>
+<th>Product</th>
+<th>Qty</th>
+<th>Price</th>
+<th>GST</th>
+<th>Amount</th>
+</tr>
+
+<tr><td>1</td><td>SUDDS Helios Blue Grey Helmet Glossy (Yellow M)</td><td>1</td><td>3300</td><td>0%</td><td>3300</td></tr>
+
+</table>
+
+
+
+<table class="summary">
+
+<tr>
+<td>Subtotal:</td>
+<td>₹3300.00</td>
+</tr>
+
+<tr>
+<td>GST:</td>
+<td>₹0.00</td>
+</tr>
+
+<tr>
+<td>Discount:</td>
+<td>-₹300.00</td>
+</tr>
+
+<tr class="bold">
+<td>Total:</td>
+<td>₹3000.00</td>
+</tr>
+
+</table>
+
+
+<div class="line"></div>
+
+<div class="terms">
+<b>Terms & Conditions:</b><br>
+1. Payment due within 30 days.<br>
+2. Goods once sold will not be taken back.<br>
+3. All disputes subject to local jurisdiction.
+</div>
+
+
+<div class="sign">
+<div class="sig">Customer Signature</div>
+<div class="sig">Authorized Signatory</div>
+</div>
+
+<button onclick="window.print()">
+Print / Save PDF
+</button>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkfrontend=self.webpackChunkfrontend||[]).push([[290],{1290(e,t,r){r.d(t,{NativeBiometricWeb:()=>o});var n=r(1120);class o extends n.E_{constructor(){super()}isAvailable(){throw new Error("Method not implemented.")}verifyIdentity(e){throw new Error("Method not implemented.")}getCredentials(e){throw new Error("Method not implemented.")}setCredentials(e){throw new Error("Method not implemented.")}deleteCredentials(e){throw new Error("Method not implemented.")}}}}]);
+//# sourceMappingURL=290.c0bf1254.chunk.js.map

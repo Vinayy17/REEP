@@ -4,6 +4,8 @@ sudo rm -rf /var/www/rridegarage.com/*
 sudo cp -r build/* /var/www/rridegarage.com/
 sudo nginx -t
 sudo systemctl reload nginx
+scp -r build/* root@143.110.253.167:/var/www/erp/
+
 server {
     server_name gokhalebandhu.com www.gokhalebandhu.com;
 
@@ -53,3 +55,702 @@ server {
 }
 
                                                                                                48,0-1        Bot
+          {activeTab === "create" && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="lg:col-span-2 space-y-6">
+
+                <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+                 <CardHeader className="border-b bg-muted/30">
+  <div className="flex items-center justify-between">
+    
+    <div className="flex items-center gap-2">
+      <Plus className="w-5 h-5 text-primary" />
+      <CardTitle>Create Invoice</CardTitle>
+    </div>
+
+    {draftId && (
+      <div className="bg-yellow-50 border border-yellow-300 text-yellow-800 px-3 py-1 rounded-lg text-xs font-medium">
+        Editing Draft • #{draftId}
+      </div>
+    )}
+
+  </div>
+</CardHeader>
+                  <CardContent className="p-6 space-y-6">
+                    {/* Customer Details Section */}
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Customer Details
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Customer Phone<span className="text-red-500">*</span>
+
+                          </Label>
+                          <Input
+                            placeholder="Enter phone number"
+                            value={customerPhone}
+                            onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ""))}
+                            maxLength={10}
+                            required
+                            className="h-11 rounded-xl"
+                          />
+
+                        </div>
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Customer Name <span className="text-red-500">*</span>
+                          </Label>
+                          <Input
+                            placeholder="Enter name"
+                            value={customerName}
+                            onChange={(e) => setCustomerName(e.target.value)}
+                            required
+                            className="h-11 rounded-xl"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Email
+                          </Label>
+                        <Input
+      type="email"
+      placeholder="customer@example.com (optional)"
+      value={customerEmail}
+      onChange={(e) => setCustomerEmail(e.target.value)}
+      className="h-11 rounded-xl"
+    />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+                            Address
+                          </Label>
+                          <Input
+                            placeholder="Enter address"
+                            value={customerAddress}
+                            onChange={(e) => setCustomerAddress(e.target.value)}
+                            className="h-11 rounded-xl"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div className="relative">
+                        <Label
+                          htmlFor="productSearch"
+                          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block"
+                        >
+                          Search Product by Name or SKU
+                        </Label>
+                        <div className="relative group">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                          <Input
+                            id="productSearch"
+                            placeholder="Search products (e.g., Thunder, 1309)..."
+                            value={productSearchQuery}
+                            onChange={(e) => setProductSearchQuery(e.target.value)}
+                            onKeyDown={handleProductSearchKeyDown}
+                            className="pl-10 h-12 bg-muted/50 border-muted-foreground/20 focus:border-primary/50 transition-all rounded-xl"
+                          />
+                          {productSearchQuery && (
+                            <button
+                              onClick={() => setProductSearchQuery("")}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-muted text-muted-foreground"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Search Results Dropdown - FIXED SCROLL */}
+                        {productSearchResults.length > 0 && (
+                          <div className="absolute z-50 w-full mt-2 bg-card border rounded-xl shadow-2xl max-h-[350px] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
+                            <div className="p-2 space-y-1">
+                              {productSearchResults.map((product, index) => (
+                                <button
+  key={product.id}
+  ref={(el) => (resultRefs.current[index] = el)}
+                                  onClick={() => selectProduct(product)}
+                                  className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors text-left group ${
+                                    selectedSearchIndex === index
+                                      ? "bg-primary text-primary-foreground shadow-md"
+                                      : "hover:bg-muted text-foreground"
+                                  }`}
+                                >
+                                  <div className="w-12 h-12 rounded-lg bg-muted border flex-shrink-0 overflow-hidden">
+                                    <img
+                                      src={product.images?.[0] || "/placeholder.png"}
+                                      alt={product.name}
+                                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                    />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`font-semibold text-sm truncate ${selectedSearchIndex === index ? "text-primary-foreground" : ""}`}>
+                                      {product.name}
+                                    </p>
+                                    <div className={`flex items-center gap-2 text-xs mt-0.5 ${selectedSearchIndex === index ? "text-primary-foreground/80" : "text-muted-foreground"}`}>
+                                      <span className="font-mono bg-muted/80 px-1.5 py-0.5 rounded text-[10px]">
+                                        {product.sku}
+                                      </span>
+                                      <span>•</span>
+                                      <span className={`font-medium ${selectedSearchIndex === index ? "text-primary-foreground" : "text-primary"}`}>₹{product.selling_price}</span>
+                                    </div>
+                                  </div>
+                                  {product.variants?.length > 0 && (
+                                    <div className={`text-[10px] font-bold px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 ${
+                                      selectedSearchIndex === index 
+                                        ? "bg-primary-foreground/20 text-primary-foreground" 
+                                        : "bg-primary/10 text-primary"
+                                    }`}>
+                                      {product.variants.length}v
+                                    </div>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {isSearchingProducts && (
+                          <div className="absolute right-12 top-1/2 -translate-y-1/2">
+                            <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <span className="w-full border-t" />
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                          <span className="bg-card px-2 text-muted-foreground">OR SCAN SKU</span>
+                        </div>
+                      </div>
+    */}
+                      {/* SKU Scan Section
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                          <Input
+                            ref={skuInputRef}
+                            placeholder="Scan or Enter SKU..."
+                            value={skuInput}
+                            onChange={(e) => setSkuInput(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleSkuScan(skuInput)}
+                            className="pl-10 h-11 bg-muted/50 border-muted-foreground/20 rounded-xl"
+                          />
+                        </div>
+                        <Button
+                          onClick={() => handleSkuScan(skuInput)}
+                          className="h-11 px-6 rounded-xl shadow-lg shadow-primary/20"
+                        >
+                          Add
+                        </Button>
+                      </div> */}
+                    </div>
+
+                    {/* Line Items Section */}
+                    <div className="space-y-4">
+                      <Button
+  variant="outline"
+  onClick={() => setShowManualDialog(true)}
+  className="rounded-xl"
+>
+  + Add Manual Item
+</Button>
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                        Line Items
+                      </h3>
+                      <div className="max-h-[600px] overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                        {lineItems.length === 0 ? (
+                          <div className="text-center py-10 border-2 border-dashed rounded-2xl border-muted-foreground/20">
+                            <Plus className="w-10 h-10 mx-auto mb-2 text-muted-foreground/30" />
+                            <p className="text-muted-foreground">Add products to start your invoice</p>
+                          </div>
+                        ) : (
+                          lineItems.map((item, index) => (
+                            <div
+                              key={index}
+                              className="p-4 border rounded-2xl bg-card/50 hover:border-primary/30 transition-all group"
+                            >
+                              <div className="flex gap-4">
+                                <div className="w-20 h-20 rounded-xl bg-muted border overflow-hidden shrink-0">
+                                  <img
+                                    src={item.image_url || "/placeholder.png"}
+                                    alt={item.product_name}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className="font-bold text-sm line-clamp-2">{item.product_name}</h4>
+                                      {item.v_sku && (
+                                        <p className="text-xs text-muted-foreground font-mono mt-1">{item.v_sku}</p>
+                                      )}
+                                      {(item.color || item.size || item.variant_name) && (
+                                        <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
+                                          {item.variant_name && <p>Variant: <span className="font-medium text-foreground">{item.variant_name}</span></p>}
+                                          {item.color && <p>Color: <span className="font-medium text-foreground">{item.color}</span></p>}
+                                          {item.size && <p>Size: <span className="font-medium text-foreground">{item.size}</span></p>}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => removeLineItem(index)}
+                                      className="h-8 w-8 text-destructive hover:bg-destructive/10 shrink-0"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  </div>
+                                  <div className="flex items-center justify-between mt-3">
+                                    <div className="flex items-center border rounded-lg overflow-hidden h-9">
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => updateLineItem(index, "quantity", Math.max(1, item.quantity - 1))}
+                                        className="h-full w-9 rounded-none hover:bg-muted"
+                                      >
+                                        -
+                                      </Button>
+                                      <div className="w-10 text-center font-bold text-sm">{item.quantity}</div>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => updateLineItem(index, "quantity", item.quantity + 1)}
+                                        className="h-full w-9 rounded-none hover:bg-muted"
+                                      >
+                                        +
+                                      </Button>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs text-muted-foreground">Price</p>
+                                      <p className="font-bold text-primary">₹{formatCurrency(item.price)}</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+{/* ================= ADDITIONAL CHARGES ================= */}
+<Card className="mt-6">
+  <CardHeader>
+    <CardTitle>Additional Charges</CardTitle>
+  </CardHeader>
+
+  <CardContent className="space-y-3">
+    {additionalCharges.map((charge, index) => (
+      <div key={index} className="grid grid-cols-12 gap-2 items-center">
+        <Input
+          className="col-span-6"
+          placeholder="Charge label (e.g. Installation)"
+          value={charge.label}
+          onChange={(e) =>
+            updateAdditionalCharge(index, "label", e.target.value)
+          }
+        />
+
+        <Input
+          type="number"
+          className="col-span-4"
+          placeholder="Amount"
+          value={charge.amount}
+          onChange={(e) =>
+            updateAdditionalCharge(index, "amount", e.target.value)
+          }
+        />
+
+        <Button
+          variant="destructive"
+          size="icon"
+          className="col-span-2"
+          onClick={() => removeAdditionalCharge(index)}
+          disabled={additionalCharges.length === 1}
+        >
+          ✕
+        </Button>
+      </div>
+    ))}
+
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={addAdditionalCharge}
+    >
+      + Add Charge
+    </Button>
+
+    <div className="flex justify-end text-sm font-semibold">
+      Additional Total: ₹{additionalTotal.toFixed(2)}
+    </div>
+  </CardContent>
+</Card>
+
+              </div>
+
+              {/* Sidebar */}
+              <div className="lg:col-span-1 space-y-6">
+                <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+                  <CardHeader className="border-b bg-muted/30">
+                    <CardTitle className="flex items-center gap-2">
+                      <ScanLine className="w-5 h-5 text-primary" />
+                      Scan Item
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-6 space-y-4">
+                    {showCamera && (
+                      <div className="relative mx-auto max-w-xs overflow-hidden rounded-lg border-2 border-primary aspect-square flex items-center justify-center bg-black">
+                        {cameraLoading && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                            <Loader2 className="w-8 h-8 animate-spin text-white" />
+                          </div>
+                        )}
+                        <div id="reader" className="w-full h-full"></div>
+                        <div className="absolute bottom-4 left-0 right-0 text-center pointer-events-none z-20">
+                          <p className="text-white text-xs bg-black/50 inline-block px-2 py-1 rounded">
+                            Align QR code inside the box
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button
+                        variant={scanMode === "camera" ? "default" : "outline"}
+                        onClick={() => {
+                          setScanMode("camera")
+                          setShowCamera(true)
+                          if (scannerRef.current && scannerRef.current.isScanning) {
+                            scannerRef.current.resume()
+                          }
+                        }}
+                        className="flex-1 rounded-lg"
+                        size="lg"
+                      >
+                        <Camera className="w-4 h-4 mr-2" /> Use Phone
+                      </Button>
+
+                      <Button
+                        variant={scanMode === "barcode" ? "default" : "outline"}
+                        onClick={() => {
+                          setScanMode("barcode")
+                          setShowCamera(false)
+                          setTimeout(() => skuInputRef.current?.focus(), 200)
+                        }}
+                        className="flex-1 rounded-lg"
+                        size="lg"
+                      >
+                        <ScanLine className="w-4 h-4 mr-2" /> Use Device
+                      </Button>
+                    </div>
+
+                    <div className="relative">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-card px-2 text-muted-foreground">OR SCAN SKU</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          ref={skuInputRef}
+                          placeholder="Scan or Enter SKU..."
+                          value={skuInput}
+                          onChange={(e) => setSkuInput(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleSkuScan(skuInput)}
+                          className="pl-10 h-11 bg-muted/50 border-muted-foreground/20 rounded-xl"
+                          disabled={scanMode === "camera"}
+                        />
+                      </div>
+                      <Button
+                        onClick={() => handleSkuScan(skuInput)}
+                        disabled={scanMode === "camera"}
+                        className="h-11 px-6 rounded-xl shadow-lg shadow-primary/20"
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-none shadow-xl bg-card/50 backdrop-blur-sm overflow-hidden">
+  <CardHeader className="border-b bg-muted/30">
+    <CardTitle className="flex items-center gap-2">
+      <ScanLine className="w-5 h-5 text-primary" />
+      Invoice Summary
+    </CardTitle>
+  </CardHeader>
+
+  <CardContent className="p-6 space-y-4">
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+      {/* DISCOUNT */}
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          Discount (₹)
+        </Label>
+
+        <Input
+          type="number"
+          value={discount}
+          onChange={(e) => setDiscount(Number(e.target.value))}
+          min="0"
+          className="h-11 rounded-xl"
+        />
+      </div>
+
+
+      {/* PAYMENT STATUS */}
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          Payment Status
+        </Label>
+
+        <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+  <SelectTrigger className="h-11 rounded-xl bg-[#0F172A] border border-[#2A3553] text-gray-200">
+    <SelectValue placeholder="Select status" />
+  </SelectTrigger>
+
+  <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+
+    <SelectItem 
+      value="pending" 
+      className="focus:bg-[#1A233A] hover:bg-[#1A233A]"
+    >
+      Pending
+    </SelectItem>
+
+    <SelectItem 
+      value="paid" 
+      className="focus:bg-[#1A233A] hover:bg-[#1A233A]"
+    >
+      Paid
+    </SelectItem>
+
+    <SelectItem 
+      value="partial" 
+      className="focus:bg-[#1A233A] hover:bg-[#1A233A]"
+    >
+      Partial
+    </SelectItem>
+
+  </SelectContent>
+</Select>
+      </div>
+
+
+      {/* PAYMENT MODE */}
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          Payment Mode
+        </Label>
+
+        <Select value={paymentMode} onValueChange={setPaymentMode}>
+  <SelectTrigger className="h-11 rounded-xl bg-[#0F172A] border border-[#2A3553] text-gray-200">
+    <SelectValue placeholder="Select mode" />
+  </SelectTrigger>
+
+  <SelectContent className="bg-[#0F172A] text-gray-200 border border-[#2A3553] shadow-xl rounded-xl">
+
+    <SelectItem
+      value="cash"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      Cash
+    </SelectItem>
+
+    <SelectItem
+      value="bank"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      Bank
+    </SelectItem>
+
+    <SelectItem
+      value="upi"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      UPI
+    </SelectItem>
+
+    <SelectItem
+      value="card"
+      className="hover:bg-[#1A233A] focus:bg-[#1A233A]"
+    >
+      Card
+    </SelectItem>
+
+  </SelectContent>
+</Select>
+      </div>
+
+
+      {/* PAID AMOUNT FOR PARTIAL */}
+      {paymentStatus === "partial" && (
+        <div>
+          <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+            Paid Amount
+          </Label>
+
+          <Input
+            type="number"
+            min="0"
+            value={paidAmount}
+            onChange={(e) => setPaidAmount(Number(e.target.value))}
+            className="h-11 rounded-xl"
+          />
+        </div>
+      )}
+
+    </div>
+
+
+    {/* GST SWITCH */}
+    <div className="flex items-center justify-between gap-3">
+      <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Apply GST
+      </Label>
+
+      <input
+        type="checkbox"
+        checked={gstEnabled}
+        onChange={(e) => setGstEnabled(e.target.checked)}
+        className="w-5 h-5 accent-primary cursor-pointer"
+      />
+    </div>
+
+
+    {/* GST RATE */}
+    {gstEnabled && (
+      <div>
+        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
+          GST Percentage (%)
+        </Label>
+
+        <Input
+          type="number"
+          min="0"
+          max="28"
+          step="0.1"
+          value={gstRate}
+          onChange={(e) => setGstRate(Number(e.target.value))}
+          className="h-11 rounded-xl"
+        />
+      </div>
+    )}
+
+
+    {/* TOTALS */}
+    <div className="border-t pt-4 space-y-2 text-sm">
+
+      <div className="flex justify-between text-muted-foreground">
+        <span>Subtotal:</span>
+        <span className="font-medium text-foreground">
+          ₹{formatCurrency(subtotal)}
+        </span>
+      </div>
+
+
+      {additionalCharges
+        .filter((c) => Number(c.amount) > 0)
+        .map((c, i) => (
+          <div key={i} className="flex justify-between text-muted-foreground">
+            <span>{c.label || "Additional Charge"}:</span>
+            <span className="font-medium text-foreground">
+              ₹{formatCurrency(c.amount)}
+            </span>
+          </div>
+        ))}
+
+
+      <div className="flex justify-between text-muted-foreground">
+        <span>GST Amount:</span>
+        <span className="font-medium text-foreground">
+          ₹{formatCurrency(gstAmount)}
+        </span>
+      </div>
+
+
+      <div className="flex justify-between text-muted-foreground">
+        <span>Discount:</span>
+        <span className="font-medium text-foreground">
+          -₹{formatCurrency(discount)}
+        </span>
+      </div>
+
+
+      <div className="flex justify-between font-bold text-base border-t pt-3 mt-2">
+        <span>Total:</span>
+        <span>₹{formatCurrency(total)}</span>
+      </div>
+
+
+      {/* SHOW BALANCE */}
+      {paymentStatus === "partial" && (
+        <div className="flex justify-between text-red-500 font-semibold">
+          <span>Balance:</span>
+          <span>₹{formatCurrency(total - paidAmount)}</span>
+        </div>
+      )}
+
+    </div>
+
+
+    {/* ACTION BUTTONS */}
+    <div className="flex gap-3">
+
+      <Button
+        variant="destructive"
+        size="sm"
+        className="h-11 rounded-xl"
+        onClick={resetForm}
+      >
+        Reset Invoice
+      </Button>
+
+
+      <Button
+        variant="outline"
+        className="flex-1 h-11 rounded-xl"
+        onClick={() => handleSaveDraft(false)}
+      >
+        Save Draft
+      </Button>
+
+    </div>
+
+
+    <Button
+      disabled={creatingInvoice}
+      className="w-full h-12 rounded-xl shadow-lg shadow-primary/20"
+      onClick={handleCreateInvoice}
+    >
+      {creatingInvoice
+        ? "Creating..."
+        : draftId
+        ? "Finalize Invoice"
+        : "Create Invoice"}
+    </Button>
+
+  </CardContent>
+</Card>
+
+              </div>
+            </div>
+          )}

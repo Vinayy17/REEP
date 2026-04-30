@@ -1,5 +1,5 @@
 "use client";
-
+import { NativeBiometric } from "capacitor-native-biometric";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
@@ -154,25 +154,42 @@ const Login = () => {
   }
 
   /* ================= LOGIN / REGISTER ================= */
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
+ const handleSubmit = async (e) => {
+  e.preventDefault();
+  setLoading(true);
 
-    try {
-      if (isLogin) {
-        await login(email, password);
-        toast.success("Welcome back!");
-      } else {
-        await register(email, password, name);
-        toast.success("Account created successfully!");
+  try {
+    if (isLogin) {
+      await login(email, password);
+
+      // Save credentials for biometric login
+      try {
+        const result = await NativeBiometric.isAvailable();
+
+        if (result.isAvailable) {
+          await NativeBiometric.setCredentials({
+            username: email,
+            password: password,
+            server: "invenTrack",
+          });
+        }
+      } catch (bioErr) {
+        console.log("Biometric storage failed:", bioErr);
       }
-      navigate("/");
-    } catch (error) {
-      toast.error(error.response?.data?.detail || "Authentication failed");
-    } finally {
-      setLoading(false);
+
+      toast.success("Welcome back!");
+    } else {
+      await register(email, password, name);
+      toast.success("Account created successfully!");
     }
-  };
+
+    navigate("/");
+  } catch (error) {
+    toast.error(error.response?.data?.detail || "Authentication failed");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
@@ -257,6 +274,52 @@ const Login = () => {
                   ? "Don't have an account? Sign up"
                   : "Already have an account? Sign in"}
               </button>
+              {isLogin && (
+  <Button
+    type="button"
+    variant="outline"
+    className="w-full mt-3"
+    onClick={async () => {
+      try {
+        const available = await NativeBiometric.isAvailable();
+
+        if (!available.isAvailable) {
+          toast.error("Biometric authentication not available");
+          return;
+        }
+
+        // Ask fingerprint
+        await NativeBiometric.verifyIdentity({
+          reason: "Login using fingerprint",
+          title: "Fingerprint Login",
+          subtitle: "Authenticate",
+          description: "Use your fingerprint to login",
+        });
+
+        // Get stored credentials
+        const credentials = await NativeBiometric.getCredentials({
+          server: "invenTrack",
+        });
+
+        if (!credentials) {
+          toast.error("No biometric credentials found");
+          return;
+        }
+
+        await login(credentials.username, credentials.password);
+
+        toast.success("Fingerprint login successful");
+        navigate("/");
+
+      } catch (err) {
+        console.log(err);
+        toast.error("Fingerprint authentication failed");
+      }
+    }}
+  >
+    Login with Fingerprint
+  </Button>
+)}
             </div>
           </CardContent>
         </Card>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import axios from "axios"
+import { useLocation, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -18,22 +19,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { toast } from "sonner"
-import { Plus, FolderTree, Trash2 } from "lucide-react"
+import { Plus, FolderTree, Trash2, Search } from "lucide-react"
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`
 
 export default function Categories() {
+  const navigate = useNavigate()
+  const location = useLocation()
   const [categories, setCategories] = useState([])
   const [open, setOpen] = useState(false)
+  const [searchTerm, setSearchTerm] = useState("")
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -42,6 +38,14 @@ export default function Categories() {
   useEffect(() => {
     fetchCategories()
   }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get("action") === "add") {
+      setOpen(true)
+      navigate("/categories", { replace: true })
+    }
+  }, [location.search, navigate])
 
   const fetchCategories = async () => {
     try {
@@ -80,32 +84,28 @@ export default function Categories() {
     setFormData({ name: "", description: "" })
   }
 
-  return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-4xl font-bold">Categories</h1>
-          <p className="text-muted-foreground mt-1">
-            Organize your products by categories
-          </p>
-        </div>
+  const filteredCategories = categories.filter((cat) =>
+    `${cat.name} ${cat.description || ""}`.toLowerCase().includes(searchTerm.toLowerCase())
+  )
 
+  return (
+    <div className="space-y-4 p-4 sm:p-6">
+      <div className="flex justify-end">
         <Dialog
           open={open}
-          onOpenChange={(v) => {
-            setOpen(v)
-            if (!v) resetForm()
+          onOpenChange={(next) => {
+            setOpen(next)
+            if (!next) resetForm()
           }}
         >
           <DialogTrigger asChild>
-            <Button>
-              <Plus className="w-4 h-4 mr-2" />
+            <Button className="hidden rounded-2xl sm:inline-flex">
+              <Plus className="mr-2 h-4 w-4" />
               Add Category
             </Button>
           </DialogTrigger>
 
-          <DialogContent>
+          <DialogContent className="max-w-[95vw] rounded-3xl sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Add New Category</DialogTitle>
             </DialogHeader>
@@ -115,10 +115,9 @@ export default function Categories() {
                 <Label>Category Name</Label>
                 <Input
                   value={formData.name}
-                  onChange={(e) =>
-                    setFormData({ ...formData, name: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   required
+                  className="h-12 rounded-2xl"
                 />
               </div>
 
@@ -126,13 +125,12 @@ export default function Categories() {
                 <Label>Description</Label>
                 <Input
                   value={formData.description}
-                  onChange={(e) =>
-                    setFormData({ ...formData, description: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="h-12 rounded-2xl"
                 />
               </div>
 
-              <Button type="submit" className="w-full">
+              <Button type="submit" className="h-12 w-full rounded-2xl">
                 Create Category
               </Button>
             </form>
@@ -140,59 +138,57 @@ export default function Categories() {
         </Dialog>
       </div>
 
-      {/* Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Category List</CardTitle>
-        </CardHeader>
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search category..."
+          className="h-10 rounded-2xl pl-10"
+        />
+      </div>
 
-        <CardContent>
-          {categories.length === 0 ? (
-            <div className="text-center py-10 text-muted-foreground">
-              <FolderTree className="w-10 h-10 mx-auto mb-3" />
+      <Card className="border-border/60 shadow-sm">
+        <CardContent className="p-3 sm:p-4">
+          {filteredCategories.length === 0 ? (
+            <div className="py-12 text-center text-muted-foreground">
+              <FolderTree className="mx-auto mb-3 h-10 w-10" />
               No categories found
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>#</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredCategories.map((cat, index) => (
+                <Card key={cat.id} className="rounded-2xl border shadow-sm">
+                  <CardContent className="space-y-3 p-3">
+                    <div className="flex items-start gap-2">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                        <FolderTree className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="min-w-0 break-words text-sm font-semibold leading-5">{cat.name}</p>
+                          <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                            {index + 1}
+                          </p>
+                        </div>
+                        <p className="mt-1 break-words line-clamp-2 text-xs text-muted-foreground">
+                          {cat.description || "No description provided"}
+                        </p>
+                      </div>
+                    </div>
 
-              <TableBody>
-                {categories.map((cat, index) => (
-                  <TableRow key={cat.id}>
-                    <TableCell className="font-medium">
-                      {index + 1}
-                    </TableCell>
-
-                    <TableCell className="flex items-center gap-2">
-                      <FolderTree className="w-4 h-4 text-primary" />
-                      {cat.name}
-                    </TableCell>
-
-                    <TableCell className="text-muted-foreground">
-                      {cat.description || "-"}
-                    </TableCell>
-
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => handleDelete(cat.id)}
-                      >
-                        <Trash2 className="w-4 h-4 mr-1" />
-                        Delete
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-8 w-full rounded-lg text-[11px]"
+                      onClick={() => handleDelete(cat.id)}
+                    >
+                      Delete
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>

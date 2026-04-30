@@ -4,7 +4,7 @@ import sys
 # ============================
 # CONFIG — EDIT ONLY THIS
 # ============================
-BASE_URL = "http://143.110.253.167:8000"
+BASE_URL = "http://localhost:8000"
 ADMIN_EMAIL = "admin@gmail.com"
 ADMIN_PASSWORD = "123456"
 

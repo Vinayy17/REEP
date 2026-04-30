@@ -1,16 +1,35 @@
 "use client"
 
-import { useEffect, useRef, useState, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import axios from "axios"
+import { useSearchParams } from "react-router-dom"
+import { toast } from "sonner"
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Download,
+  Filter,
+  History,
+  Loader2,
+  PackageSearch,
+  Search,
+} from "lucide-react"
+import { Capacitor } from "@capacitor/core"
+import {
+  initializePdfDownloadSupport,
+  savePdfWithNotification,
+} from "@/lib/pdfHandler"
+
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -18,141 +37,175 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { toast } from "sonner"
-import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  History,
-  Search,
-} from "lucide-react"
-import { useSearchParams } from "react-router-dom"
 
 const API =
   `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
 
-export default function Inventory() {
-  const [activeTab, setActiveTab] = useState("inward")
+const currency = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 2,
+})
 
-  // ================= SKU LOOKUP =================
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("token")
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+const tabButtonClass = isActive =>
+  isActive ? "bg-primary text-primary-foreground" : ""
+
+const isNativePlatform = () => Capacitor.isNativePlatform()
+
+export default function Inventory() {
+  const [activeTab, setActiveTab] = useState("report")
+
   const [skuInput, setSkuInput] = useState("")
   const [lookupData, setLookupData] = useState(null)
   const [qtyInputs, setQtyInputs] = useState({})
   const [reason, setReason] = useState("")
   const [loading, setLoading] = useState(false)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [transactionsLoading, setTransactionsLoading] = useState(false)
   const skuRef = useRef(null)
 
-  // ================= HISTORY =================
   const [transactions, setTransactions] = useState([])
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
   const [page, setPage] = useState(1)
   const limit = 30
   const [total, setTotal] = useState(0)
-const [searchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
 
-  // ================= LOOKUP =================
- const lookupSku = async (skuOverride) => {
-  const sku = (skuOverride ?? skuInput).trim()
+  const [categories, setCategories] = useState([])
+  const [reportSearch, setReportSearch] = useState("")
+  const [selectedCategory, setSelectedCategory] = useState("all")
+  const [activeCategory, setActiveCategory] = useState(null)
+  const [showMobileFilters, setShowMobileFilters] = useState(false)
+  const [inventoryReport, setInventoryReport] = useState({
+    summary: {
+      total_categories: 0,
+      total_products: 0,
+      total_stock: 0,
+      low_stock_products: 0,
+    },
+    categories: [],
+  })
 
-  if (!sku) {
-    toast.error("Enter SKU")
-    return
-  }
+  useEffect(() => {
+    initializePdfDownloadSupport().catch(() => {
+      // keep export working even if notifications are unavailable
+    })
+  }, [])
 
-  try {
-    setLoading(true)
-
-    const res = await axios.get(`${API}/inventory/lookup/${sku}`)
-
-    setLookupData(res.data)
-
-    const map = {}
-
-    if (res.data.variants?.length > 0) {
-      res.data.variants.forEach(v => {
-        map[v.v_sku] = ""
+  const fetchCategories = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/categories`, {
+        headers: getAuthHeaders(),
       })
-    } else {
-      map[res.data.parent_sku] = ""
+      setCategories(res.data || [])
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to load categories")
     }
+  }, [])
 
-    setQtyInputs(map)
-  } catch (e) {
-    toast.error(e.response?.data?.detail || "SKU not found")
-    setLookupData(null)
+  const fetchInventoryReport = useCallback(async () => {
+    try {
+      setReportLoading(true)
+      const params = {}
+
+      if (reportSearch.trim()) params.search = reportSearch.trim()
+      if (selectedCategory !== "all") params.category_id = selectedCategory
+
+      const res = await axios.get(`${API}/inventory/report`, {
+        params,
+        headers: getAuthHeaders(),
+      })
+
+      setInventoryReport(res.data)
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed to load inventory report")
+    } finally {
+      setReportLoading(false)
+    }
+  }, [reportSearch, selectedCategory])
+const downloadInventoryPdf = async () => {
+  try {
+    setDownloadingPdf(true)
+
+    const params = {}
+    if (reportSearch.trim()) params.search = reportSearch.trim()
+    if (selectedCategory !== "all") params.category_id = selectedCategory
+
+    const response = await axios.get(`${API}/inventory/report/pdf`, {
+      params,
+      headers: getAuthHeaders(),
+      responseType: "blob",
+    })
+
+    const fileName = `inventory_${Date.now()}.pdf`
+
+    const downloadResult = await savePdfWithNotification({
+      blob: response.data,
+      fileName,
+    })
+
+    toast.success(
+      isNativePlatform()
+        ? (
+          downloadResult.notificationsGranted
+            ? "Inventory PDF saved. Check your notification."
+            : "Inventory PDF saved to Files. Notification permission denied."
+        )
+        : "Inventory PDF downloaded"
+    )
+
+  } catch (error) {
+    console.error(error)
+    toast.error("Failed to download PDF")
   } finally {
-    setLoading(false)
+    setDownloadingPdf(false)
   }
 }
 
 
-  // ================= QTY =================
-  const handleQtyChange = (sku, value) => {
-    setQtyInputs(prev => ({ ...prev, [sku]: value }))
-  }
+  const lookupSku = useCallback(async skuOverride => {
+    const sku = (skuOverride ?? skuInput).trim()
 
-  // ================= INWARD =================
-  const submitInward = async () => {
-    try {
-      setLoading(true)
-
-      const reqs = Object.entries(qtyInputs)
-        .filter(([_, q]) => Number(q) > 0)
-        .map(([sku, q]) =>
-          axios.post(`${API}/inventory/material-inward/sku`, {
-            sku,
-            quantity: Number(q),
-          })
-        )
-
-      if (!reqs.length) {
-        toast.error("Enter quantity")
-        return
-      }
-
-      await Promise.all(reqs)
-      toast.success("Stock added successfully")
-      resetForm()
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Failed")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // ================= OUTWARD =================
-  const submitOutward = async () => {
-    if (!reason) {
-      toast.error("Reason required")
+    if (!sku) {
+      toast.error("Enter SKU")
       return
     }
 
     try {
       setLoading(true)
+      const res = await axios.get(`${API}/inventory/lookup/${sku}`, {
+        headers: getAuthHeaders(),
+      })
 
-      const reqs = Object.entries(qtyInputs)
-        .filter(([_, q]) => Number(q) > 0)
-        .map(([sku, q]) =>
-          axios.post(`${API}/inventory/material-outward/sku`, {
-            sku,
-            quantity: Number(q),
-            reason,
-          })
-        )
+      setLookupData(res.data)
 
-      if (!reqs.length) {
-        toast.error("Enter quantity")
-        return
+      const map = {}
+      if (res.data.variants?.length > 0) {
+        res.data.variants.forEach(variant => {
+          map[variant.v_sku] = ""
+        })
+      } else {
+        map[res.data.parent_sku] = ""
       }
 
-      await Promise.all(reqs)
-      toast.success("Stock deducted successfully")
-      resetForm()
-    } catch (e) {
-      toast.error(e.response?.data?.detail || "Failed")
+      setQtyInputs(map)
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "SKU not found")
+      setLookupData(null)
     } finally {
       setLoading(false)
     }
+  }, [skuInput])
+
+  const handleQtyChange = (sku, value) => {
+    setQtyInputs(prev => ({ ...prev, [sku]: value }))
   }
 
   const resetForm = () => {
@@ -163,140 +216,397 @@ const [searchParams] = useSearchParams()
     skuRef.current?.focus()
   }
 
-  // ================= TRANSACTIONS =================
+  const submitInward = async () => {
+    try {
+      setLoading(true)
+      const payloads = Object.entries(qtyInputs)
+        .filter(([, quantity]) => Number(quantity) > 0)
+        .map(([sku, quantity]) =>
+          axios.post(
+            `${API}/inventory/material-inward/sku`,
+            { sku, quantity: Number(quantity) },
+            { headers: getAuthHeaders() }
+          )
+        )
+
+      if (!payloads.length) {
+        toast.error("Enter quantity")
+        return
+      }
+
+      await Promise.all(payloads)
+      toast.success("Stock added successfully")
+      resetForm()
+      fetchInventoryReport()
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const submitOutward = async () => {
+    if (!reason.trim()) {
+      toast.error("Reason required")
+      return
+    }
+
+    try {
+      setLoading(true)
+      const payloads = Object.entries(qtyInputs)
+        .filter(([, quantity]) => Number(quantity) > 0)
+        .map(([sku, quantity]) =>
+          axios.post(
+            `${API}/inventory/material-outward/sku`,
+            { sku, quantity: Number(quantity), reason: reason.trim() },
+            { headers: getAuthHeaders() }
+          )
+        )
+
+      if (!payloads.length) {
+        toast.error("Enter quantity")
+        return
+      }
+
+      await Promise.all(payloads)
+      toast.success("Stock deducted successfully")
+      resetForm()
+      fetchInventoryReport()
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "Failed")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchTransactions = useCallback(async () => {
+    try {
+      setTransactionsLoading(true)
+      const params = { page, limit }
+      if (filterType !== "all") params.type = filterType
+
+      const res = await axios.get(`${API}/inventory/transactions`, {
+        params,
+        headers: getAuthHeaders(),
+      })
+
+      setTransactions(res.data.data || [])
+      setTotal(res.data.total || 0)
+    } catch {
+      toast.error("Failed to load transactions")
+    } finally {
+      setTransactionsLoading(false)
+    }
+  }, [filterType, limit, page])
+
   useEffect(() => {
-    if (activeTab === "history") fetchTransactions()
-  }, [activeTab, page, filterType])
-const fetchTransactions = async () => {
-  try {
-    const params = { page, limit }
-    if (filterType !== "all") params.type = filterType
+    fetchCategories()
+  }, [fetchCategories])
 
-    const res = await axios.get(`${API}/inventory/transactions`, { params })
+  useEffect(() => {
+    if (activeTab === "history") {
+      fetchTransactions()
+    }
+  }, [activeTab, fetchTransactions])
 
-    setTransactions(res.data.data || [])
-    setTotal(res.data.total)
-  } catch {
-    toast.error("Failed to load transactions")
-  }
-}
-useEffect(() => {
-  const sku = searchParams.get("sku")
-  const mode = searchParams.get("mode")
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchInventoryReport()
+    }, 300)
 
-  if (sku) {
-    setSkuInput(sku)
+    return () => clearTimeout(timer)
+  }, [fetchInventoryReport])
 
-    setActiveTab(mode === "out" ? "outward" : "inward")
+  useEffect(() => {
+    const sku = searchParams.get("sku")
+    const mode = searchParams.get("mode")
 
-    // ✅ DIRECT lookup with correct SKU
-    lookupSku(sku)
-  }
-}, [searchParams])
-
-
+    if (sku) {
+      setSkuInput(sku)
+      setActiveTab(mode === "out" ? "outward" : "inward")
+      lookupSku(sku)
+    }
+  }, [lookupSku, searchParams])
 
   const filteredTransactions = useMemo(() => {
-    if (!searchTerm) return transactions
-    const q = searchTerm.toLowerCase()
-    return transactions.filter(
-      t =>
-        t.product_name.toLowerCase().includes(q) ||
-        t.product_code.toLowerCase().includes(q) ||
-        t.variant_sku?.toLowerCase().includes(q)
+    if (!searchTerm.trim()) return transactions
+    const query = searchTerm.toLowerCase()
+
+    return transactions.filter(transaction =>
+      transaction.product_name?.toLowerCase().includes(query) ||
+      transaction.product_code?.toLowerCase().includes(query) ||
+      transaction.variant_sku?.toLowerCase().includes(query)
     )
   }, [transactions, searchTerm])
 
   const totalPages = Math.ceil(total / limit)
+  const reportCategories = useMemo(
+    () => inventoryReport.categories || [],
+    [inventoryReport.categories]
+  )
+  const summary = inventoryReport.summary || {}
+  const activeCategoryData = useMemo(
+    () => reportCategories.find(category => category.category_id === activeCategory) || null,
+    [activeCategory, reportCategories]
+  )
 
-  // ================= UI =================
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-4xl font-bold">Inventory Management</h1>
+    <div className="space-y-5 bg-[#050816] p-3 text-slate-100 md:p-5">
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h1 className="hidden text-2xl font-bold tracking-tight text-white md:block md:text-3xl">
+              Inventory 
+            </h1>
+            <p className="mt-1 hidden text-sm text-slate-300 md:block">
+              Compact category-first stock analysis for faster inventory checks.
+            </p>
+          </div>
 
-      {/* TABS */}
-      <div className="flex gap-2">
-        <Button
-          variant={activeTab === "inward" ? "default" : "outline"}
-          onClick={() => setActiveTab("inward")}
-        >
-          <ArrowDownToLine className="w-4 h-4 mr-2" /> Inward
-        </Button>
+         <Button
+  onClick={downloadInventoryPdf}
+  disabled={downloadingPdf}
+  className="hidden md:flex h-9 rounded-xl bg-[#4f46e5] px-3 text-xs font-semibold text-white shadow-lg shadow-indigo-950/40 hover:bg-[#4338ca] md:h-10 md:px-4 md:text-sm"
+>
+  {downloadingPdf ? (
+    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin md:mr-2 md:h-4 md:w-4" />
+  ) : (
+    <Download className="mr-1.5 h-3.5 w-3.5 md:mr-2 md:h-4 md:w-4" />
+  )}
+  <span className="hidden md:inline">Download PDF</span>
+</Button>
+        </div>
 
-        <Button
-          variant={activeTab === "outward" ? "default" : "outline"}
-          onClick={() => setActiveTab("outward")}
-        >
-          <ArrowUpFromLine className="w-4 h-4 mr-2" /> Outward
-        </Button>
+        <div className="grid grid-cols-3 gap-2">
+          <SummaryCard title="Categories" mobileTitle="Cat" value={summary.total_categories || 0} />
+          <SummaryCard title="Products" mobileTitle="Prod" value={summary.total_products || 0} />
+          <SummaryCard title="Total Stock" mobileTitle="Stock" value={summary.total_stock || 0} />
+        </div>
 
-        <Button
-          variant={activeTab === "history" ? "default" : "outline"}
-          onClick={() => setActiveTab("history")}
-        >
-          <History className="w-4 h-4 mr-2" /> History
-        </Button>
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <Button
+            variant={activeTab === "report" ? "default" : "outline"}
+            className={`h-9 shrink-0 rounded-xl border-slate-700 px-3 text-xs ${tabButtonClass(activeTab === "report")}`}
+            onClick={() => setActiveTab("report")}
+          >
+            <PackageSearch className="h-3.5 w-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Stock Report</span>
+          </Button>
+
+          <Button
+            variant={activeTab === "inward" ? "default" : "outline"}
+            className={`h-9 shrink-0 rounded-xl border-slate-700 px-3 text-xs ${tabButtonClass(activeTab === "inward")}`}
+            onClick={() => setActiveTab("inward")}
+          >
+            <ArrowDownToLine className="h-3.5 w-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Inward</span>
+          </Button>
+
+          <Button
+            variant={activeTab === "outward" ? "default" : "outline"}
+            className={`h-9 shrink-0 rounded-xl border-slate-700 px-3 text-xs ${tabButtonClass(activeTab === "outward")}`}
+            onClick={() => setActiveTab("outward")}
+          >
+            <ArrowUpFromLine className="h-3.5 w-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">Outward</span>
+          </Button>
+
+          <Button
+            variant={activeTab === "history" ? "default" : "outline"}
+            className={`h-9 shrink-0 rounded-xl border-slate-700 px-3 text-xs ${tabButtonClass(activeTab === "history")}`}
+            onClick={() => setActiveTab("history")}
+          >
+            <History className="h-3.5 w-3.5 md:mr-1.5" />
+            <span className="hidden md:inline">History</span>
+          </Button>
+           <Button
+            onClick={downloadInventoryPdf}
+            disabled={downloadingPdf}
+            className="h-9 rounded-xl bg-[#4f46e5] px-3 text-xs font-semibold text-white shadow-lg shadow-indigo-950/40 hover:bg-[#4338ca] md:h-10 md:px-4 md:text-sm"
+          >
+            {downloadingPdf ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin md:mr-2 md:h-4 md:w-4" />
+            ) : (
+              <Download className="mr-1.5 h-3.5 w-3.5 md:mr-2 md:h-4 md:w-4" />
+            )}
+            <span className="hidden md:inline">Download PDF</span>
+          </Button>
+        </div>
       </div>
 
-      {/* INWARD / OUTWARD */}
+      {activeTab === "report" && (
+        <div className="space-y-4">
+          <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+            <CardContent className="space-y-2 p-3">
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                  <Input
+                    value={reportSearch}
+                    onChange={event => setReportSearch(event.target.value)}
+                    placeholder="Search by product name, code, SKU, or category"
+                    className="h-10 rounded-xl border-slate-700 bg-[#0f172f] pl-9 text-sm text-white placeholder:text-slate-400"
+                  />
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowMobileFilters(current => !current)}
+                  className="h-10 shrink-0 rounded-xl border-slate-700 bg-[#0f172f] px-3 text-xs text-white md:hidden"
+                >
+                  <Filter className="mr-1.5 h-3.5 w-3.5" />
+                  Filter
+                </Button>
+
+                <div className="hidden md:block md:w-[210px]">
+                  <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                    <SelectTrigger className="h-10 rounded-xl border-slate-700 bg-[#0f172f] text-white">
+                      <SelectValue placeholder="Filter by category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Categories</SelectItem>
+                      {categories.map(category => (
+                        <SelectItem key={category.id} value={category.id}>
+                          {category.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {showMobileFilters && (
+                <div className="md:hidden">
+                  <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                    <SelectTrigger className="h-10 rounded-xl border-slate-700 bg-[#0f172f] text-white">
+                      <SelectValue placeholder="Filter by category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Categories</SelectItem>
+                      {categories.map(category => (
+                        <SelectItem key={category.id} value={category.id}>
+                          {category.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {reportLoading ? (
+            <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+              <CardContent className="flex min-h-[220px] items-center justify-center">
+                <div className="flex items-center gap-3 text-sm text-slate-300">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Loading inventory report...
+                </div>
+              </CardContent>
+            </Card>
+          ) : reportCategories.length === 0 ? (
+            <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+              <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-2 text-center">
+                <PackageSearch className="h-10 w-10 text-slate-300" />
+                <div className="text-base font-semibold text-white">No products found</div>
+                <p className="max-w-md text-sm text-slate-300">
+                  Try changing the search text or category filter to view more inventory items.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {reportCategories.map(category => (
+                <button
+                  key={category.category_id}
+                  type="button"
+                  onClick={() => setActiveCategory(category.category_id)}
+                  className="group rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0f172f] to-[#0b1023] p-2.5 text-left shadow-lg shadow-black/20 transition hover:border-indigo-500/60 hover:shadow-indigo-950/40"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-[13px] font-bold text-white md:text-base">
+                        {category.category_name}
+                      </h2>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        {category.product_count} products
+                      </p>
+                    </div>
+
+                    <span className="rounded-full bg-indigo-500/15 px-2 py-1 text-[10px] font-semibold text-indigo-200">
+                      Open
+                    </span>
+                  </div>
+
+                  <div className="mt-2.5 grid grid-cols-3 gap-1.5">
+                    <CompactBadge label="Products" value={category.product_count} />
+                    <CompactBadge label="Stock" value={category.total_stock} highlight="indigo" />
+                    <CompactBadge label="Low" value={category.low_stock_count} highlight="red" />
+                  </div>
+
+                  <div className="mt-2.5 flex items-center justify-between rounded-xl border border-slate-800 bg-black/20 px-2 py-1.5">
+                    <span className="text-[10px] font-medium text-slate-400">
+                      Largest categories first
+                    </span>
+                    <span className="text-[11px] font-semibold text-slate-200 group-hover:text-white">
+                      View Details
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {(activeTab === "inward" || activeTab === "outward") && (
-        <Card className="max-w-2xl">
+        <Card className="max-w-3xl rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
           <CardHeader>
-            <CardTitle>
-              {activeTab === "inward"
-                ? "Material Inward"
-                : "Material Outward"}
+            <CardTitle className="text-lg font-semibold text-white">
+              {activeTab === "inward" ? "Material Inward" : "Material Outward"}
             </CardTitle>
           </CardHeader>
 
           <CardContent className="space-y-4">
-            <div>
+            <div className="space-y-2">
               <Label>Scan / Enter SKU</Label>
               <Input
                 ref={skuRef}
                 value={skuInput}
-                onChange={e => setSkuInput(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && lookupSku()}
+                onChange={event => setSkuInput(event.target.value)}
+                onKeyDown={event => event.key === "Enter" && lookupSku()}
                 placeholder="Parent SKU or Variant SKU"
+                className="h-11 rounded-xl border-slate-700 bg-[#0f172f] text-white"
               />
-             
             </div>
 
             {lookupData && (
-              <div className="bg-muted p-4 rounded space-y-3">
-                <div className="font-semibold text-lg">
-                  {lookupData.product_name}
+              <div className="space-y-3 rounded-2xl border border-slate-800 bg-[#0f172f] p-4">
+                <div>
+                  <div className="text-lg font-semibold text-white">{lookupData.product_name}</div>
+                  <div className="text-sm text-slate-300">
+                    Parent SKU: <span className="font-mono">{lookupData.parent_sku}</span>
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">
+                    Total Stock: {lookupData.total_stock}
+                  </div>
                 </div>
 
-                <div className="text-sm">
-                  Parent SKU:{" "}
-                  <span className="font-mono">
-                    {lookupData.parent_sku}
-                  </span>
-                </div>
-
-                <div className="font-semibold">
-                  Total Stock: {lookupData.total_stock}
-                </div>
-
-                {/* VARIANTS OR PRODUCT */}
                 {(lookupData.variants?.length > 0
                   ? lookupData.variants
-                  : [
-                      {
-                        v_sku: lookupData.parent_sku,
-                        stock: lookupData.total_stock,
-                      },
-                    ]
-                ).map(v => (
+                  : [{ v_sku: lookupData.parent_sku, stock: lookupData.total_stock }]
+                ).map(variant => (
                   <div
-                    key={v.v_sku}
-                    className="bg-background border p-3 rounded space-y-2"
+                    key={variant.v_sku}
+                    className="space-y-3 rounded-2xl border border-slate-700 bg-[#0b1023] p-4"
                   >
-                    <div className="flex justify-between">
-                      <span className="font-mono">{v.v_sku}</span>
-                      <span className="font-semibold">
-                        Stock: {v.stock}
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="font-mono text-sm font-semibold text-slate-100">
+                        {variant.v_sku}
+                      </span>
+                      <span className="text-sm font-semibold text-slate-100">
+                        Stock: {variant.stock}
                       </span>
                     </div>
 
@@ -304,10 +614,9 @@ useEffect(() => {
                       type="number"
                       min="1"
                       placeholder="Qty"
-                      value={qtyInputs[v.v_sku] || ""}
-                      onChange={e =>
-                        handleQtyChange(v.v_sku, e.target.value)
-                      }
+                      value={qtyInputs[variant.v_sku] || ""}
+                      onChange={event => handleQtyChange(variant.v_sku, event.target.value)}
+                      className="h-11 rounded-xl border-slate-700 bg-[#111936] text-white"
                     />
                   </div>
                 ))}
@@ -315,51 +624,51 @@ useEffect(() => {
             )}
 
             {activeTab === "outward" && (
-              <div>
+              <div className="space-y-2">
                 <Label>Reason</Label>
                 <Input
                   value={reason}
-                  onChange={e => setReason(e.target.value)}
+                  onChange={event => setReason(event.target.value)}
+                  className="h-11 rounded-xl border-slate-700 bg-[#0f172f] text-white"
+                  placeholder="Damaged / Sold / Returned"
                 />
               </div>
             )}
 
             <Button
-              className="w-full"
+              className="h-11 w-full rounded-xl bg-[#4f46e5] text-white hover:bg-[#4338ca]"
               disabled={loading}
-              onClick={
-                activeTab === "inward"
-                  ? submitInward
-                  : submitOutward
-              }
+              onClick={activeTab === "inward" ? submitInward : submitOutward}
             >
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Submit
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* HISTORY */}
       {activeTab === "history" && (
-        <Card>
+        <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
           <CardHeader>
-            <CardTitle>Transaction History</CardTitle>
+            <CardTitle className="text-lg font-semibold text-white">
+              Transaction History
+            </CardTitle>
           </CardHeader>
 
           <CardContent className="space-y-4">
-            <div className="flex gap-4">
+            <div className="flex flex-col gap-3 md:flex-row">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-3 w-4 h-4 text-muted-foreground" />
+                <Search className="absolute left-3 top-3.5 h-4 w-4 text-slate-400" />
                 <Input
-                  className="pl-9"
+                  className="h-11 rounded-xl border-slate-700 bg-[#0f172f] pl-9 text-white"
                   placeholder="Search product / SKU"
                   value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
+                  onChange={event => setSearchTerm(event.target.value)}
                 />
               </div>
 
               <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger className="w-32">
+                <SelectTrigger className="h-11 w-full rounded-xl border-slate-700 bg-[#0f172f] text-white md:w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -371,67 +680,66 @@ useEffect(() => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="min-w-full text-sm">
                 <thead>
-                  <tr className="border-b text-muted-foreground">
-                    <th>Date</th>
-                    <th>Type</th>
-                    <th>Product</th>
-                    <th>Code</th>
-                    <th>V-SKU</th>
-                    <th>Qty</th>
-                    <th>Stock After</th>
-                      <th>By</th> {/* 👈 ADD THIS */}
-
+                  <tr className="border-b border-slate-700 text-left text-slate-300">
+                    <th className="px-3 py-3 font-semibold">Date</th>
+                    <th className="px-3 py-3 font-semibold">Type</th>
+                    <th className="px-3 py-3 font-semibold">Product</th>
+                    <th className="px-3 py-3 font-semibold">Code</th>
+                    <th className="px-3 py-3 font-semibold">V-SKU</th>
+                    <th className="px-3 py-3 font-semibold">Qty</th>
+                    <th className="px-3 py-3 font-semibold">Stock After</th>
+                    <th className="px-3 py-3 font-semibold">By</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {filteredTransactions.map(t => (
-                    <tr key={t.id} className="border-b hover:bg-muted/40">
-                      <td>{new Date(t.created_at).toLocaleString()}</td>
+                  {filteredTransactions.map(transaction => (
+                    <tr key={transaction.id} className="border-b border-slate-800 last:border-b-0">
+                      <td className="px-3 py-3">{new Date(transaction.created_at).toLocaleString()}</td>
                       <td
-                        className={
-                          t.type === "IN"
-                            ? "text-green-600 font-semibold"
-                            : "text-red-600 font-semibold"
-                        }
+                        className={`px-3 py-3 font-semibold ${
+                          transaction.type === "IN" ? "text-green-600" : "text-red-600"
+                        }`}
                       >
-                        {t.type}
+                        {transaction.type}
                       </td>
-                      <td>{t.product_name}</td>
-                      <td className="font-mono">{t.product_code}</td>
-                      <td className="font-mono">{t.variant_sku || "—"}</td>
-                      <td>{t.quantity}</td>
-<td className="font-semibold">
-  {t.variant_sku
-    ? t.variant_stock_after ?? "—"
-    : t.stock_after}
-</td>
-<td className="text-sm font-medium">
-  {t.created_by || "—"}   {/* 👈 USER NAME */}
-</td>
+                      <td className="px-3 py-3">{transaction.product_name}</td>
+                      <td className="px-3 py-3 font-mono">{transaction.product_code}</td>
+                      <td className="px-3 py-3 font-mono">{transaction.variant_sku || "-"}</td>
+                      <td className="px-3 py-3">{transaction.quantity}</td>
+                      <td className="px-3 py-3 font-semibold">
+                        {transaction.variant_sku
+                          ? transaction.variant_stock_after ?? "-"
+                          : transaction.stock_after}
+                      </td>
+                      <td className="px-3 py-3">{transaction.created_by || "-"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
 
-            <div className="flex justify-between items-center">
-              <Button
-                disabled={page === 1}
-                onClick={() => setPage(p => p - 1)}
-              >
+            {transactionsLoading && (
+              <div className="flex items-center justify-center py-4 text-sm text-slate-500">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading history...
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <Button disabled={page === 1} onClick={() => setPage(current => current - 1)}>
                 Prev
               </Button>
 
-              <span>
+              <span className="text-sm text-slate-300">
                 Page {page} / {totalPages || 1}
               </span>
 
               <Button
                 disabled={page >= totalPages}
-                onClick={() => setPage(p => p + 1)}
+                onClick={() => setPage(current => current + 1)}
               >
                 Next
               </Button>
@@ -439,6 +747,170 @@ useEffect(() => {
           </CardContent>
         </Card>
       )}
+
+      <Dialog
+        open={Boolean(activeCategoryData)}
+        onOpenChange={open => {
+          if (!open) setActiveCategory(null)
+        }}
+      >
+        <DialogContent className="max-h-[92vh] max-w-4xl overflow-hidden rounded-2xl border border-slate-800 bg-[#060b1a] p-0 text-slate-100">
+          {activeCategoryData && (
+            <>
+              <DialogHeader className="border-b border-slate-800 bg-gradient-to-r from-[#101935] to-[#0b1023] px-4 py-4 sm:px-5">
+                <DialogTitle className="text-left text-base font-bold text-white sm:text-lg">
+                  {activeCategoryData.category_name}
+                </DialogTitle>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <CategoryBadge label="Products" value={activeCategoryData.product_count} />
+                  <CategoryBadge label="Total Stock" value={activeCategoryData.total_stock} highlight="indigo" />
+                  <CategoryBadge label="Low Stock" value={activeCategoryData.low_stock_count} highlight="red" />
+                </div>
+              </DialogHeader>
+
+              <div className="max-h-[70vh] overflow-y-auto px-3 py-3 sm:px-5">
+                {activeCategoryData.products.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-700 bg-[#0b1023] p-6 text-center text-sm text-slate-300">
+                    No products in this category.
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1.5 md:hidden">
+                      {activeCategoryData.products.map(product => (
+                        <div
+                          key={product.id}
+                          className="rounded-2xl border border-slate-800 bg-[#0b1023] p-2.5 shadow-md shadow-black/20"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-[13px] font-semibold text-white">
+                                {product.name}
+                              </div>
+                              <div className="mt-1 text-[11px] text-slate-400">
+                                {product.product_code} • <span className="font-mono">{product.sku}</span>
+                              </div>
+                            </div>
+                            <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${stockToneFor(product.is_low_stock)}`}>
+                              {product.stock}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 grid grid-cols-3 gap-1.5">
+                            <MiniStat label="Min" value={product.min_stock} />
+                            <MiniStat
+                              label="Stock"
+                              value={product.stock}
+                              className={product.is_low_stock ? "text-red-400" : "text-emerald-400"}
+                            />
+                            <MiniStat label="Price" value={currency.format(product.selling_price || 0)} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="hidden overflow-hidden rounded-2xl border border-slate-800 md:block">
+                      <table className="min-w-full text-left text-sm">
+                        <thead className="bg-[#111936] text-slate-200">
+                          <tr>
+                            <th className="px-4 py-3 font-semibold">Product Name</th>
+                            <th className="px-4 py-3 font-semibold">Code</th>
+                            <th className="px-4 py-3 font-semibold">SKU</th>
+                            <th className="px-4 py-3 font-semibold">Stock</th>
+                            <th className="px-4 py-3 font-semibold">Min</th>
+                            <th className="px-4 py-3 font-semibold">Price</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeCategoryData.products.map(product => (
+                            <tr key={product.id} className="border-t border-slate-800 bg-[#0b1023]">
+                              <td className="px-4 py-3 font-medium text-white">{product.name}</td>
+                              <td className="px-4 py-3 font-mono text-slate-300">{product.product_code}</td>
+                              <td className="px-4 py-3 font-mono text-slate-300">{product.sku}</td>
+                              <td className={`px-4 py-3 font-bold ${product.is_low_stock ? "text-red-400" : "text-emerald-400"}`}>
+                                {product.stock}
+                              </td>
+                              <td className={`px-4 py-3 font-semibold ${product.is_low_stock ? "text-red-300" : "text-slate-200"}`}>
+                                {product.min_stock}
+                              </td>
+                              <td className="px-4 py-3 font-semibold text-slate-100">
+                                {currency.format(product.selling_price || 0)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
+}
+
+function SummaryCard({ title, mobileTitle, value, danger = false }) {
+  return (
+    <Card className="rounded-2xl border border-slate-800 bg-gradient-to-br from-[#111936] to-[#0b1023] shadow-lg shadow-black/20">
+      <CardContent className="p-2.5 md:p-4">
+        <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-400 md:text-xs md:tracking-[0.18em]">
+          <span className="md:hidden">{mobileTitle || title}</span>
+          <span className="hidden md:inline">{title}</span>
+        </p>
+        <p className={`mt-1.5 text-base font-bold md:text-2xl ${danger ? "text-[#ff5c7a]" : "text-white"}`}>
+          {value}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+function CategoryBadge({ label, value, danger = false, highlight = "default" }) {
+  const tone =
+    highlight === "red" || danger
+      ? "border-red-500/30 bg-red-500/10 text-red-200"
+      : highlight === "indigo"
+      ? "border-indigo-500/30 bg-indigo-500/15 text-indigo-100"
+      : "border-slate-700 bg-slate-800/80 text-slate-100"
+
+  return (
+    <div className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${tone}`}>
+      {label}: {value}
+    </div>
+  )
+}
+
+function CompactBadge({ label, value, highlight = "default" }) {
+  const tone =
+    highlight === "red"
+      ? "border-red-500/20 bg-red-500/10 text-red-200"
+      : highlight === "indigo"
+      ? "border-indigo-500/20 bg-indigo-500/10 text-indigo-100"
+      : "border-slate-700 bg-slate-800/70 text-slate-100"
+
+  return (
+    <div className={`rounded-xl border px-2.5 py-2 ${tone}`}>
+      <div className="text-[9px] uppercase tracking-[0.12em] text-slate-400">{label}</div>
+      <div className="mt-0.5 text-xs font-bold">{value}</div>
+    </div>
+  )
+}
+
+function MiniStat({ label, value, className = "" }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-[#111936] px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{label}</div>
+      <div className={`mt-1 truncate text-xs font-semibold text-slate-100 ${className}`}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function stockToneFor(isLowStock) {
+  return isLowStock
+    ? "border-red-500/30 bg-red-500/10 text-red-200"
+    : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
 }
