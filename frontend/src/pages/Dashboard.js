@@ -51,6 +51,12 @@ const currency = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 0,
 })
 
+const floatingCardClass =
+  "rounded-2xl border border-white/10 bg-slate-950/35 backdrop-blur-md shadow-[0_18px_40px_rgba(15,23,42,0.18)]"
+
+const floatingInnerRowClass =
+  "rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-sm"
+
 export default function Dashboard() {
   const [filter, setFilter] = useState("today")
 
@@ -200,7 +206,7 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+        <Card className={floatingCardClass}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-white">Inventory Summary</CardTitle>
           </CardHeader>
@@ -270,7 +276,7 @@ export default function Dashboard() {
         </ChartCard>
       </div>
 
-      <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+      <Card className={floatingCardClass}>
         <CardHeader className="flex flex-col gap-2 pb-2 md:flex-row md:items-center md:justify-between">
           <CardTitle className="text-sm font-semibold text-white">Stock Ageing</CardTitle>
           <Select
@@ -299,7 +305,7 @@ export default function Dashboard() {
           {ageing.map(product => (
             <div
               key={product.sku}
-              className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#0f172f] px-3 py-2"
+              className={`flex items-center justify-between px-3 py-2 ${floatingInnerRowClass}`}
             >
               <div className="min-w-0">
                 <p className="truncate text-xs font-medium text-white">{product.name}</p>
@@ -327,7 +333,7 @@ export default function Dashboard() {
       </Card>
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+        <Card className={floatingCardClass}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-white">Low Stock Alerts</CardTitle>
           </CardHeader>
@@ -336,7 +342,7 @@ export default function Dashboard() {
             {paginatedLowStock.map((product, index) => (
               <div
                 key={`${product.product_name}-${index}`}
-                className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#0f172f] px-3 py-2"
+                className={`flex items-center justify-between px-3 py-2 ${floatingInnerRowClass}`}
               >
                 <span className="text-xs text-slate-100">{product.product_name}</span>
                 <Badge variant="destructive" className="text-[10px]">
@@ -354,7 +360,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+        <Card className={floatingCardClass}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-white">Recent Activity</CardTitle>
           </CardHeader>
@@ -363,7 +369,7 @@ export default function Dashboard() {
             {activity.map((item, index) => (
               <div
                 key={index}
-                className="rounded-xl border border-slate-800 bg-[#0f172f] px-3 py-2 text-xs text-slate-200"
+                className={`px-3 py-2 text-xs text-slate-200 ${floatingInnerRowClass}`}
               >
                 {item.text}
               </div>
@@ -377,7 +383,7 @@ export default function Dashboard() {
 
 function StatCard({ title, value, icon: Icon, danger = false }) {
   return (
-    <Card className="rounded-2xl border border-slate-800 bg-gradient-to-br from-[#111936] to-[#0b1023] shadow-lg shadow-black/20">
+    <Card className="rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(15,23,42,0.72),rgba(15,23,42,0.42))] backdrop-blur-md shadow-[0_18px_36px_rgba(15,23,42,0.18)]">
       <CardContent className="flex items-center justify-between p-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">{title}</p>
@@ -393,7 +399,7 @@ function StatCard({ title, value, icon: Icon, danger = false }) {
 
 function ChartCard({ title, children }) {
   return (
-    <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+    <Card className={floatingCardClass}>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-white">{title}</CardTitle>
       </CardHeader>

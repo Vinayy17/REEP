@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
-import { Plus, Edit, Trash2, Search, QrCode, Camera, X, ImageIcon, SlidersHorizontal, ArrowUpDown } from "lucide-react"
+import { Plus, Edit, Trash2, Search, QrCode, Camera, X, ImageIcon, SlidersHorizontal } from "lucide-react"
 import imageCompression from "browser-image-compression"
 import { useLocation, useNavigate } from "react-router-dom"
 import { useRef } from "react"
@@ -19,29 +19,6 @@ import Inventory from "@/components/inventory"
 import Combo from "@/components/combo"
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`
-
-const PRODUCT_SORT_OPTIONS = [
-  { value: "none", label: "Default Sort" },
-  { value: "name-asc", label: "Name: A to Z" },
-  { value: "name-desc", label: "Name: Z to A" },
-  { value: "sku-asc", label: "SKU: Ascending" },
-  { value: "sku-desc", label: "SKU: Descending" },
-  { value: "selling-low-high", label: "Selling Price: Low to High" },
-  { value: "selling-high-low", label: "Selling Price: High to Low" },
-  { value: "cost-low-high", label: "Cost Price: Low to High" },
-  { value: "cost-high-low", label: "Cost Price: High to Low" },
-  { value: "stock-low-high", label: "Stock: Low to High" },
-  { value: "stock-high-low", label: "Stock: High to Low" },
-]
-
-const HEADER_SORT_CONFIG = {
-  name: { asc: "name-asc", desc: "name-desc" },
-  category: { asc: "category-asc", desc: "category-desc" },
-  sku: { asc: "sku-asc", desc: "sku-desc" },
-  selling: { asc: "selling-low-high", desc: "selling-high-low" },
-  cost: { asc: "cost-low-high", desc: "cost-high-low" },
-  stock: { asc: "stock-low-high", desc: "stock-high-low" },
-}
 export const compressImage = async (file) => {
   const options = {
     maxSizeMB: 0.25,              // ⬅️ even safer (250 KB)
@@ -93,7 +70,7 @@ const [stockSku, setStockSku] = useState("")
 const [stockMode, setStockMode] = useState("inward")
   const [search, setSearch] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("all")
-  const [sortOptions, setSortOptions] = useState([])
+  const [priceSort, setPriceSort] = useState("none")
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [imagePreviews, setImagePreviews] = useState([])
@@ -156,7 +133,7 @@ const [stockMode, setStockMode] = useState("inward")
   }, [])
   useEffect(() => {
     setPage(1)
-  }, [debouncedSearch, categoryFilter, sortOptions])
+  }, [debouncedSearch, categoryFilter, priceSort])
   useEffect(() => {
     const t = setTimeout(() => {
       setDebouncedSearch(search)
@@ -165,7 +142,7 @@ const [stockMode, setStockMode] = useState("inward")
   }, [search])
   useEffect(() => {
     fetchProducts()
-  }, [page, debouncedSearch, categoryFilter, sortOptions])
+  }, [page, debouncedSearch, categoryFilter])
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -223,7 +200,7 @@ const [stockMode, setStockMode] = useState("inward")
           limit,
           search: debouncedSearch,
           category_id: categoryFilter !== "all" ? String(categoryFilter) : null,
-          sort: sortOptions.length ? sortOptions.join(",") : null,
+          sort: priceSort !== "none" ? priceSort : null,
         },
       })
 
@@ -232,79 +209,6 @@ const [stockMode, setStockMode] = useState("inward")
     } catch {
       toast.error("Failed to load products")
     }
-  }
-
-  const getHeaderSortState = (key) => {
-    const config = HEADER_SORT_CONFIG[key]
-    if (!config) return "none"
-    if (sortOptions.includes(config.asc)) return "asc"
-    if (sortOptions.includes(config.desc)) return "desc"
-    return "none"
-  }
-
-  const toggleHeaderSort = (key) => {
-    const config = HEADER_SORT_CONFIG[key]
-    if (!config) return
-
-    const currentState = getHeaderSortState(key)
-    setSortOptions((prev) => {
-      const filtered = prev.filter((item) => item !== config.asc && item !== config.desc)
-
-      if (currentState === "none") {
-        return [config.asc, ...filtered]
-      }
-
-      if (currentState === "asc") {
-        return [config.desc, ...filtered]
-      }
-
-      return filtered
-    })
-  }
-
-  const getSortLabel = (value) =>
-    PRODUCT_SORT_OPTIONS.find((option) => option.value === value)?.label || "Default Sort"
-
-  const handleDropdownSortChange = (value) => {
-    if (!value || value === "none") {
-      setSortOptions([])
-      return
-    }
-
-    setSortOptions([value])
-  }
-
-  const getHeaderSortPriority = (key) => {
-    const config = HEADER_SORT_CONFIG[key]
-    if (!config) return null
-
-    const index = sortOptions.findIndex(
-      (item) => item === config.asc || item === config.desc
-    )
-
-    return index === -1 ? null : index + 1
-  }
-
-  const renderSortableHeader = (label, key, align = "left") => {
-    const state = getHeaderSortState(key)
-    const priority = getHeaderSortPriority(key)
-    const alignmentClass = align === "center" ? "justify-center" : "justify-start"
-    const ascendingLabel = ["selling", "cost", "stock"].includes(key) ? "Low-High" : "A-Z"
-    const descendingLabel = ["selling", "cost", "stock"].includes(key) ? "High-Low" : "Z-A"
-
-    return (
-      <button
-        type="button"
-        onClick={() => toggleHeaderSort(key)}
-        className={`inline-flex items-center gap-1 font-bold uppercase tracking-wider hover:text-foreground transition-colors ${alignmentClass}`}
-      >
-        <span>{label}</span>
-        <ArrowUpDown className={`h-3.5 w-3.5 ${state !== "none" ? "text-primary" : "text-muted-foreground"}`} />
-        {state === "asc" && <span className="text-[10px] text-primary">{ascendingLabel}</span>}
-        {state === "desc" && <span className="text-[10px] text-primary">{descendingLabel}</span>}
-        {priority && <span className="text-[10px] text-primary">#{priority}</span>}
-      </button>
-    )
   }
 
 
@@ -323,10 +227,7 @@ const [stockMode, setStockMode] = useState("inward")
   const fetchCategories = async () => {
     try {
       const res = await axios.get(`${API}/categories`)
-      const sortedCategories = [...(res.data || [])].sort((a, b) =>
-        String(a.name || "").localeCompare(String(b.name || ""))
-      )
-      setCategories(sortedCategories)
+      setCategories(res.data)
     } catch {
       toast.error("Failed to load categories")
     }
@@ -1199,6 +1100,24 @@ setCategoryQuery(product.category_name || "")
             </SelectContent>
           </Select>
 
+          <Select value={priceSort} onValueChange={setPriceSort}>
+            <SelectTrigger className="flex-1 sm:w-48 h-11 bg-black text-white border border-border">
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+
+            <SelectContent className="bg-black text-white border border-border">
+              <SelectItem value="none" className="focus:bg-white/10">
+                Default Sort
+              </SelectItem>
+              <SelectItem value="low-high" className="focus:bg-white/10">
+                Price: Low to High
+              </SelectItem>
+              <SelectItem value="high-low" className="focus:bg-white/10">
+                Price: High to Low
+              </SelectItem>
+            </SelectContent>
+          </Select>
+
         </div>}
         </div>
         {isMobile && mobileFiltersOpen && <div className="flex gap-2">
@@ -1215,18 +1134,14 @@ setCategoryQuery(product.category_name || "")
               ))}
             </SelectContent>
           </Select>
-          <Select value={sortOptions[0] || "none"} onValueChange={handleDropdownSortChange}>
+          <Select value={priceSort} onValueChange={setPriceSort}>
             <SelectTrigger className="flex-1 h-11 bg-black text-white border border-border">
-              <SelectValue placeholder="Sort By">
-                {getSortLabel(sortOptions[0] || "none")}
-              </SelectValue>
+              <SelectValue placeholder="Sort" />
             </SelectTrigger>
             <SelectContent className="bg-black text-white border border-border">
-              {PRODUCT_SORT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value} className="focus:bg-white/10">
-                  {option.label}
-                </SelectItem>
-              ))}
+              <SelectItem value="none" className="focus:bg-white/10">Default Sort</SelectItem>
+              <SelectItem value="low-high" className="focus:bg-white/10">Price: Low to High</SelectItem>
+              <SelectItem value="high-low" className="focus:bg-white/10">Price: High to Low</SelectItem>
             </SelectContent>
           </Select>
         </div>}
@@ -1283,21 +1198,25 @@ setCategoryQuery(product.category_name || "")
                   </div>
                 </div>
 
-                <div className="flex-1 flex min-w-0 flex-col justify-between py-0.5">
+                <div className="flex-1 flex flex-col justify-between py-0.5">
                   <div>
-                    <h3 className="text-[15px] font-extrabold leading-[1.2] tracking-[-0.01em] text-foreground line-clamp-2 min-h-[2.4em]">
+                    <h3
+                      className={`font-bold leading-tight break-words ${
+                        (p.name || "").length > 30 ? "text-xs" : (p.name || "").length > 20 ? "text-sm" : "text-base"
+                      }`}
+                    >
                       {p.name}
                     </h3>
-                    <p className="mt-1 text-[11px] font-bold text-muted-foreground uppercase tracking-[0.08em] line-clamp-1">
+                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mt-1">
                       {p.category_name} • {p.sku}
                     </p>
                   </div>
 
                   <div className="flex items-center justify-between mt-auto">
-                    <span className="text-[18px] font-black tracking-[-0.02em] text-primary">₹{p.selling_price}</span>
+                    <span className="text-lg font-black text-primary">₹{p.selling_price}</span>
                     <div className="flex items-center gap-1.5">
                       <span
-                        className={`text-[11px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap ${p.stock <= p.min_stock
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${p.stock <= p.min_stock
                           ? "bg-destructive/10 text-destructive"
                           : "bg-green-500/10 text-green-500"
                           }`}
@@ -1402,14 +1321,14 @@ setCategoryQuery(product.category_name || "")
               <thead>
                 <tr className="bg-muted/50 text-xs font-bold text-muted-foreground uppercase tracking-wider border-b">
                   <th className="p-4 text-left">#</th>
-                  <th className="p-4 text-left">{renderSortableHeader("Name / Info", "name")}</th>
-                  <th className="p-4 text-left">{renderSortableHeader("Category", "category")}</th>
+                  <th className="p-4 text-left">Name / Info</th>
+                  <th className="p-4 text-left">Category</th>
                   <th className="p-4 text-left">Image</th>
-                  <th className="p-4 text-left">{renderSortableHeader("SKU", "sku")}</th>
+                  <th className="p-4 text-left">SKU</th>
                   <th className="p-4 text-left text-center">QR</th>
-                  {role === "admin" && <th className="p-4 text-left">{renderSortableHeader("Cost", "cost")}</th>}
-                  <th className="p-4 text-left">{renderSortableHeader("Sell Price", "selling")}</th>
-                  <th className="p-4 text-left">{renderSortableHeader("Stock", "stock")}</th>
+                  {role === "admin" && <th className="p-4 text-left">Cost</th>}
+                  <th className="p-4 text-left">Sell Price</th>
+                  <th className="p-4 text-left">Stock</th>
                   <th className="p-4 text-left">Variants</th>
                   {role === "admin" && <th className="p-4 text-center">Actions</th>}
                 </tr>
@@ -1705,7 +1624,7 @@ setCategoryQuery(product.category_name || "")
 
     </div>
   </DialogContent>
-</Dialog>
+</Dialog> 
     </div>
   )
 }

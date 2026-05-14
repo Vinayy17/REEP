@@ -3,7 +3,7 @@ const COMPANY = {
   tagline: "BIKE GARAGE & STUDIO",
   address:
     "Mahaveer Building, gala no 09, near payal talkies, mandai road, Dhamankar naka, Bhiwandi, 421305",
-  contact: "Phone: +91 90822 582580 | Email: outransystems@gmail.com",
+  contact: "Phone: +91 8793678780 | Email: rridemods@gmail.com",
   signatory: "R RIDE GARAGE",
   terms: [
     "Payment is due within 30 days of invoice date.",
@@ -35,7 +35,7 @@ const formatInvoiceDate = (value) => {
   }
 }
 
-const formatMoney = (value, formatter) => `Rs. ${formatter(value || 0)}`
+const formatMoney = (value, formatter) => `₹ ${formatter(value || 0)}`
 
 const getStatusMeta = (status) => {
   const normalized = String(status || "pending").toLowerCase()
@@ -531,3 +531,4 @@ export const buildInvoicePrintHtml = ({ invoice, subtotal, gstAmount, total, for
     </html>
   `
 }
+

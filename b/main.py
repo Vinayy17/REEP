@@ -64,7 +64,7 @@ INVOICE_COMPANY_ADDRESS = (
     "Mahaveer Building, gala no 09, near payal talkies, mandai road, "
     "Dhamankar naka, Bhiwandi, 421305"
 )
-INVOICE_COMPANY_CONTACT = "Phone: +91 90822 582580 | Email: outransystems@gmail.com"
+INVOICE_COMPANY_CONTACT = "Phone: +91 8793678780 | Email: rridemods@gmail.com"
 INVOICE_TERMS = [
     "1. Payment is due within 30 days of invoice date.",
     "2. Late payments may incur additional charges.",
@@ -952,6 +952,11 @@ class EmployeeCreate(BaseModel):
     role: Optional[str] = None
     salary: float
 
+class EmployeeUpdate(BaseModel):
+    name: str
+    role: Optional[str] = None
+    salary: float
+
 class SalaryRecordCreate(BaseModel):
     payment_date: Optional[date] = None
     notes: Optional[str] = None
@@ -1362,8 +1367,8 @@ def calculate_draft_payment_summary(
     if payment_status == "partial":
         partial_paid = round(float(paid_amount or 0), 2)
 
-        if partial_paid <= 0:
-            raise HTTPException(400, "Partial payment required")
+        if partial_paid < 0:
+            raise HTTPException(400, "Partial payment cannot be negative")
 
         if partial_paid > total:
             raise HTTPException(400, "Partial exceeds total")
@@ -2281,9 +2286,6 @@ def calculate_invoice_settlement(
 
         if partial_paid < 0:
             raise HTTPException(400, "Partial payment cannot be negative")
-
-        if partial_paid <= 0 and advance_used <= 0:
-            raise HTTPException(400, "Partial payment required")
 
         if partial_paid > remaining_after_advance:
             raise HTTPException(400, "Partial exceeds payable amount")
@@ -7588,6 +7590,65 @@ def create_employee(
     return serialize_employee(db, employee)
 
 
+@api_router.put("/employees/{employee_id}")
+def update_employee(
+    employee_id: str,
+    data: EmployeeUpdate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    employee = (
+        db.query(EmployeeModel)
+        .filter(EmployeeModel.id == employee_id)
+        .with_for_update()
+        .first()
+    )
+    if not employee:
+        raise HTTPException(404, "Employee not found")
+
+    updated_salary = round_currency(data.salary)
+    if updated_salary <= 0:
+        raise HTTPException(400, "Salary must be greater than zero")
+
+    employee.name = data.name.strip()
+    employee.role = data.role
+    employee.salary = updated_salary
+
+    current_month_record = get_employee_month_salary_record(db, employee.id)
+    if current_month_record and round_currency(current_month_record.pending_amount) > 0:
+        current_month_record.total_salary = updated_salary
+        current_month_record.pending_amount = round_currency(
+            max(updated_salary - float(current_month_record.paid_amount or 0), 0)
+        )
+
+    db.commit()
+    db.refresh(employee)
+    return serialize_employee(db, employee)
+
+
+@api_router.delete("/employees/{employee_id}")
+def delete_employee(
+    employee_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    employee = db.query(EmployeeModel).filter(EmployeeModel.id == employee_id).first()
+    if not employee:
+        raise HTTPException(404, "Employee not found")
+
+    salary_history = (
+        db.query(SalaryPaymentModel.id)
+        .filter(SalaryPaymentModel.employee_id == employee_id)
+        .first()
+    )
+    if salary_history:
+        raise HTTPException(400, "Employee has salary history and cannot be deleted")
+
+    db.delete(employee)
+    db.commit()
+    return {"message": "Employee deleted successfully"}
+
+
 @api_router.get("/salary-payments")
 def get_salary_payments(
     employee_id: Optional[str] = None,
@@ -9338,4 +9399,5 @@ app.add_middleware(
 )
 
   
+    
     

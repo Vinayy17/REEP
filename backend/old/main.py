@@ -887,7 +887,6 @@ class AdvancePaymentRequest(BaseModel):
     customer_id: str
     amount: float
     payment_mode: str
-    reference: Optional[str] = None
     payment_date: Optional[date] = None
     cheque_number: Optional[str] = None
     cheque_date: Optional[date] = None
@@ -1243,7 +1242,7 @@ def normalize_draft_payment_mode(mode: Optional[str]) -> str:
 
 
 def should_use_advance(value: Optional[bool]) -> bool:
-    return False
+    return value is not False
 
 
 def calculate_invoice_advance(
@@ -1252,49 +1251,25 @@ def calculate_invoice_advance(
     use_advance: bool = True,
     db: Optional[Session] = None
 ):
-    return 0.0, round(float(original_total or 0), 2)
+    if not customer or not use_advance:
+        return 0.0, round(original_total, 2)
+
+    current_balance = (
+        calculate_customer_current_balance(db, customer)
+        if db else
+        float(customer.current_balance or 0)
+    )
+    if current_balance >= 0:
+        return 0.0, round(original_total, 2)
+
+    advance_available = abs(current_balance)
+    advance_used = min(advance_available, float(original_total or 0))
+    final_total = round(float(original_total or 0) - advance_used, 2)
+    return round(advance_used, 2), final_total
 
 
 def apply_customer_invoice_balance(customer: Optional[CustomerModel], original_total: float, paid_amount: float):
     return
-
-
-def add_customer_ledger_entry(
-    db: Session,
-    *,
-    entry_type: str,
-    description: str,
-    payment_mode: str,
-    current_user: UserModel,
-    customer_id: Optional[str] = None,
-    reference_id: Optional[str] = None,
-    debit: float = 0,
-    credit: float = 0,
-    entry_date: Optional[date] = None,
-):
-    debit_amount = round(float(debit or 0), 2)
-    credit_amount = round(float(credit or 0), 2)
-
-    if debit_amount <= 0 and credit_amount <= 0:
-        return None
-
-    ledger_entry = LedgerEntry(
-        id=str(uuid.uuid4()),
-        entry_type=(entry_type or "general").strip(),
-        reference_id=reference_id,
-        customer_id=customer_id,
-        description=(description or "Ledger entry").strip(),
-        debit=debit_amount,
-        credit=credit_amount,
-        payment_mode=(payment_mode or "cash").strip().lower(),
-        entry_date=entry_date or datetime.now(IST).date(),
-        created_by=current_user.id if current_user else None,
-        created_by_name=current_user.name if current_user else None,
-        created_at=datetime.now(IST),
-    )
-    db.add(ledger_entry)
-    db.flush()
-    return ledger_entry
 
 
 def calculate_customer_current_balance(db: Session, customer: Optional[CustomerModel]) -> float:
@@ -1303,18 +1278,39 @@ def calculate_customer_current_balance(db: Session, customer: Optional[CustomerM
 
     pending_total = db.query(
         func.coalesce(
-            func.sum(func.coalesce(InvoiceModel.balance_amount, 0)),
+            func.sum(
+                case(
+                    (InvoiceModel.payment_status.in_(["pending", "partial"]), func.coalesce(InvoiceModel.balance_amount, 0)),
+                    else_=0
+                )
+            ),
             0
         )
     ).filter(
         InvoiceModel.customer_id == customer.id,
         InvoiceModel.invoice_type == "FINAL",
-        InvoiceModel.payment_status.in_(["pending", "partial"]),
-        InvoiceModel.balance_amount > 0,
         InvoiceModel.payment_status != "cancelled",
     ).scalar() or 0
 
-    return round(float(pending_total or 0), 2)
+    advance_in_total = db.query(
+        func.coalesce(func.sum(LedgerEntry.credit), 0)
+    ).filter(
+        LedgerEntry.customer_id == customer.id,
+        LedgerEntry.entry_type == "advance_in"
+    ).scalar() or 0
+
+    advance_used_total = db.query(
+        func.coalesce(func.sum(LedgerEntry.debit), 0)
+    ).filter(
+        LedgerEntry.customer_id == customer.id,
+        LedgerEntry.entry_type == "advance_used"
+    ).scalar() or 0
+
+    opening_balance = float(customer.opening_balance or 0)
+    return round(
+        opening_balance + float(pending_total or 0) - (float(advance_in_total or 0) - float(advance_used_total or 0)),
+        2
+    )
 
 
 def sync_customer_current_balance(db: Session, customer: Optional[CustomerModel]) -> float:
@@ -1333,7 +1329,23 @@ def add_advance_sale_ledger_entry(
     advance_used: float,
     current_user: UserModel,
 ):
-    return
+    advance_amount = round(float(advance_used or 0), 2)
+
+    if advance_amount > 0:
+        db.add(LedgerEntry(
+            id=str(uuid.uuid4()),
+            entry_type="advance_used",
+            reference_id=invoice_id,
+            customer_id=customer_id,
+            description=f"Advance adjusted in invoice {invoice_number}",
+            debit=advance_amount,
+            credit=0,
+            payment_mode="adjustment",
+            entry_date=datetime.now(IST).date(),
+            created_by=current_user.id,
+            created_by_name=current_user.name,
+            created_at=datetime.now(IST),
+        ))
 
 
 def add_sale_ledger_entry(
@@ -1341,248 +1353,33 @@ def add_sale_ledger_entry(
     invoice_id: str,
     invoice_number: str,
     customer_id: Optional[str],
-    sale_total: float,
+    original_total: float,
     current_user: UserModel,
 ):
-    sale_amount = round(float(sale_total or 0), 2)
+    sale_amount = round(float(original_total or 0), 2)
     if sale_amount <= 0:
         return
 
-    add_customer_ledger_entry(
-        db,
+    db.add(LedgerEntry(
+        id=str(uuid.uuid4()),
         entry_type="sale",
-        description=f"Sale Invoice {invoice_number}",
-        payment_mode="invoice",
-        current_user=current_user,
         reference_id=invoice_id,
         customer_id=customer_id,
+        description=f"Sale Invoice {invoice_number}",
+        debit=0,
         credit=sale_amount,
-    )
-
-def get_general_ledger_balance_impact(entry: LedgerEntry) -> float:
-    if not entry:
-        return 0.0
-
-    if entry.entry_type == "sale":
-        return 0.0
-
-    return round(float(entry.credit or 0) - float(entry.debit or 0), 2)
-
-
-def _older_ledger_entries_filter(boundary_entry: LedgerEntry):
-    return or_(
-        LedgerEntry.entry_date < boundary_entry.entry_date,
-        and_(
-            LedgerEntry.entry_date == boundary_entry.entry_date,
-            LedgerEntry.created_at < boundary_entry.created_at,
-        ),
-        and_(
-            LedgerEntry.entry_date == boundary_entry.entry_date,
-            LedgerEntry.created_at == boundary_entry.created_at,
-            LedgerEntry.id < boundary_entry.id,
-        ),
-    )
-
-
-def add_invoice_payment_record(
-    db: Session,
-    invoice: InvoiceModel,
-    amount: float,
-    payment_mode: str,
-    current_user: UserModel,
-    payment_date: Optional[date] = None,
-    reference: Optional[str] = None,
-):
-    payment_amount = round(float(amount or 0), 2)
-    if payment_amount <= 0:
-        return
-
-    db.add(InvoicePayment(
-        id=str(uuid.uuid4()),
-        invoice_id=invoice.id,
-        amount=payment_amount,
-        payment_mode=payment_mode,
-        reference=reference,
+        payment_mode="invoice",
+        entry_date=datetime.now(IST).date(),
         created_by=current_user.id,
+        created_by_name=current_user.name,
         created_at=datetime.now(IST),
     ))
-
-    add_customer_ledger_entry(
-        db,
-        entry_type="payment_in",
-        reference_id=invoice.id,
-        customer_id=invoice.customer_id,
-        description=f"Payment received for invoice {invoice.invoice_number}",
-        credit=payment_amount,
-        payment_mode=payment_mode,
-        current_user=current_user,
-        entry_date=payment_date,
-    )
-
-
-def rebuild_invoice_accounting_entries(
-    db: Session,
-    invoice: InvoiceModel,
-    current_user: UserModel,
-):
-    if not invoice or invoice.invoice_type != "FINAL":
-        return
-
-    db.query(LedgerEntry).filter(
-        LedgerEntry.reference_id == invoice.id,
-        LedgerEntry.entry_type.in_(["sale", "payment_in"]),
-    ).delete(synchronize_session=False)
-
-    sale_amount = round(float(invoice.original_total or 0) - float(invoice.advance_used or 0), 2)
-    sale_amount = max(sale_amount, 0.0)
-
-    if invoice.payment_status != "cancelled" and sale_amount > 0:
-        sale_actor = current_user
-        if invoice.created_by and current_user and invoice.created_by != current_user.id:
-            sale_actor = db.query(UserModel).filter(UserModel.id == invoice.created_by).first() or current_user
-
-        add_sale_ledger_entry(
-            db,
-            invoice.id,
-            invoice.invoice_number or invoice.draft_number or "Unknown",
-            invoice.customer_id,
-            sale_amount,
-            sale_actor,
-        )
-
-    payments = (
-        db.query(InvoicePayment)
-        .filter(InvoicePayment.invoice_id == invoice.id)
-        .order_by(InvoicePayment.created_at.asc(), InvoicePayment.id.asc())
-        .all()
-    )
-
-    for payment in payments:
-        payment_actor = current_user
-        if payment.created_by and current_user and payment.created_by != current_user.id:
-            payment_actor = db.query(UserModel).filter(UserModel.id == payment.created_by).first() or current_user
-
-        add_customer_ledger_entry(
-            db,
-            entry_type="payment_in",
-            reference_id=invoice.id,
-            customer_id=invoice.customer_id,
-            description=f"Payment received for invoice {invoice.invoice_number or invoice.draft_number or 'Unknown'}",
-            credit=payment.amount,
-            payment_mode=payment.payment_mode,
-            current_user=payment_actor,
-            entry_date=(
-                payment.created_at.astimezone(IST).date()
-                if payment.created_at and payment.created_at.tzinfo
-                else payment.created_at.date()
-                if payment.created_at
-                else invoice.created_at.date()
-            ),
-        )
-
-
-def get_pending_customer_invoices(
-    db: Session,
-    customer_id: str,
-    *,
-    for_update: bool = False,
-):
-    query = (
-        db.query(InvoiceModel)
-        .filter(
-            InvoiceModel.customer_id == customer_id,
-            InvoiceModel.invoice_type == "FINAL",
-            InvoiceModel.payment_status.in_(["pending", "partial"]),
-            InvoiceModel.balance_amount > 0,
-        )
-        .order_by(InvoiceModel.created_at.asc(), InvoiceModel.id.asc())
-    )
-    if for_update:
-        query = query.with_for_update()
-    return query.all()
-
-
-def ensure_oldest_pending_invoice(db: Session, invoice: InvoiceModel):
-    oldest_pending = (
-        db.query(InvoiceModel)
-        .filter(
-            InvoiceModel.customer_id == invoice.customer_id,
-            InvoiceModel.invoice_type == "FINAL",
-            InvoiceModel.payment_status.in_(["pending", "partial"]),
-            InvoiceModel.balance_amount > 0,
-        )
-        .order_by(InvoiceModel.created_at.asc(), InvoiceModel.id.asc())
-        .first()
-    )
-
-    if oldest_pending and oldest_pending.id != invoice.id:
-        raise HTTPException(
-            400,
-            f"Clear older pending invoice {oldest_pending.invoice_number} first",
-        )
-
-
-def allocate_customer_payment(
-    db: Session,
-    customer: CustomerModel,
-    amount: float,
-    payment_mode: str,
-    current_user: UserModel,
-    *,
-    payment_date: Optional[date] = None,
-    reference: Optional[str] = None,
-):
-    remaining = round(float(amount or 0), 2)
-    allocations = []
-
-    for invoice in get_pending_customer_invoices(db, customer.id, for_update=True):
-        if remaining <= 0:
-            break
-
-        invoice_balance = round(float(invoice.balance_amount or 0), 2)
-        if invoice_balance <= 0:
-            continue
-
-        allocation = round(min(invoice_balance, remaining), 2)
-        if allocation <= 0:
-            continue
-
-        invoice.paid_amount = round(float(invoice.paid_amount or 0) + allocation, 2)
-        invoice.balance_amount = round(max(invoice_balance - allocation, 0), 2)
-        invoice.payment_status = "paid" if invoice.balance_amount <= 0 else "partial"
-        invoice.payment_mode = payment_mode
-        db.flush()
-
-        add_invoice_payment_record(
-            db,
-            invoice,
-            allocation,
-            payment_mode,
-            current_user,
-            payment_date=payment_date,
-            reference=reference,
-        )
-
-        allocations.append({
-            "invoice_id": invoice.id,
-            "invoice_number": invoice.invoice_number,
-            "amount": allocation,
-        })
-        remaining = round(remaining - allocation, 2)
-
-    sync_customer_current_balance(db, customer)
-
-    return {
-        "allocations": allocations,
-        "cleared_pending": round(sum(item["amount"] for item in allocations), 2),
-        "advance_added": 0.0,
-        "current_balance": float(customer.current_balance or 0),
-    }
 
 def calculate_draft_payment_summary(
     total: float,
     payment_status: str,
     paid_amount: Optional[float] = 0,
+    advance_used: float = 0
 ):
     if payment_status == "paid":
         return round(total, 2), 0.0
@@ -1601,50 +1398,20 @@ def calculate_draft_payment_summary(
     return 0.0, round(total, 2)
 
 
-def calculate_invoice_payment_breakdown(
-    total: float,
-    requested_status: Optional[str],
-    paid_amount: Optional[float] = 0,
-):
-    normalized_total = round(float(total or 0), 2)
-    status = normalize_draft_payment_status(requested_status)
-    actual_paid = 0.0
-    balance_amount = normalized_total
-
-    if status == "paid":
-        actual_paid = normalized_total
-        balance_amount = 0.0
-    elif status == "partial":
-        partial_amount = round(float(paid_amount or 0), 2)
-
-        if partial_amount < 0:
-            raise HTTPException(400, "Partial amount cannot be negative")
-        if partial_amount > normalized_total:
-            raise HTTPException(400, "Partial exceeds total")
-
-        actual_paid = partial_amount
-        balance_amount = round(normalized_total - actual_paid, 2)
-
-    resolved_status = resolve_invoice_payment_status(
-        status,
-        balance_amount,
-        actual_paid,
-    )
-
-    return actual_paid, balance_amount, resolved_status
-
-
 def resolve_invoice_payment_status(
     requested_status: Optional[str],
+    advance_used: float,
     balance_amount: float,
     paid_amount: float = 0,
 ):
     status = normalize_draft_payment_status(requested_status)
-    if status == "cancelled":
-        return "cancelled"
     if balance_amount <= 0:
         return "paid"
-    if float(paid_amount or 0) > 0:
+    if status == "paid":
+        return "paid"
+    if status == "partial":
+        return "partial"
+    if float(advance_used or 0) > 0 or float(paid_amount or 0) > 0:
         return "partial"
     return "pending"
 
@@ -1670,7 +1437,7 @@ def prepare_invoice_draft_data(invoice_data: InvoiceCreate, db: Session):
     if invoice_data.customer_id:
         customer = db.query(CustomerModel).filter(
             CustomerModel.id == invoice_data.customer_id
-        ).with_for_update().first()
+        ).first()
     elif invoice_data.customer_phone:
         customer = db.query(CustomerModel).filter(
             CustomerModel.phone == invoice_data.customer_phone
@@ -1853,13 +1620,15 @@ def prepare_invoice_draft_data(invoice_data: InvoiceCreate, db: Session):
     )
     payment_status = resolve_invoice_payment_status(
         payment_status,
+        advance_used,
         total,
         invoice_data.paid_amount or 0
     )
-    paid_amount, balance_amount, payment_status = calculate_invoice_payment_breakdown(
+    paid_amount, balance_amount = calculate_draft_payment_summary(
         total,
         payment_status,
         invoice_data.paid_amount,
+        advance_used
     )
 
     return {
@@ -2628,7 +2397,7 @@ def finalize_draft(
     # ================= PAYMENT =================
     customer = db.query(CustomerModel).filter(
         CustomerModel.id == draft.customer_id
-    ).with_for_update().first()
+    ).first()
 
     advance_used, final_total = calculate_invoice_advance(
         customer,
@@ -2642,14 +2411,34 @@ def finalize_draft(
     draft.advance_used = effective_advance_used
     draft.total = final_total
 
-    paid_amount, balance_amount, final_payment_status = calculate_invoice_payment_breakdown(
-        draft.total,
-        final_payment_status,
-        (
+    paid_amount = 0
+    balance_amount = draft.total
+
+    if final_payment_status == "paid":
+        paid_amount = draft.total
+        balance_amount = 0
+
+    if final_payment_status == "partial":
+        partial_amount = (
             data.paid_amount
             if data and data.paid_amount is not None
             else draft.paid_amount
-        ),
+        )
+
+        if partial_amount <= 0:
+            partial_amount = 0
+
+        if partial_amount > draft.total:
+            raise HTTPException(400, "Partial exceeds total")
+
+        paid_amount = round(float(partial_amount or 0), 2)
+        balance_amount = round(draft.total - paid_amount, 2)
+
+    final_payment_status = resolve_invoice_payment_status(
+        final_payment_status,
+        effective_advance_used,
+        balance_amount,
+        paid_amount,
     )
 
     draft.paid_amount = paid_amount
@@ -2664,29 +2453,33 @@ def finalize_draft(
     draft.draft_number = None
     draft.payment_status = final_payment_status
     draft.created_at = datetime.now(IST)
-    sale_amount = round(float(draft.original_total or 0) - float(draft.advance_used or 0), 2)
-    sale_amount = max(sale_amount, 0.0)
-    db.flush()
+
+    add_sale_ledger_entry(
+        db,
+        draft.id,
+        invoice_number,
+        draft.customer_id,
+        original_total,
+        current_user,
+    )
 
     if customer:
-        add_sale_ledger_entry(
+        add_advance_sale_ledger_entry(
             db,
             draft.id,
             invoice_number,
             draft.customer_id,
-            sale_amount,
+            effective_advance_used,
             current_user,
         )
 
         if paid_amount > 0:
-            add_invoice_payment_record(
-                db,
-                draft,
-                paid_amount,
-                final_payment_mode,
-                current_user,
-                payment_date=draft.created_at.date(),
-            )
+            db.add(InvoicePayment(
+                invoice_id=draft.id,
+                amount=paid_amount,
+                payment_mode=final_payment_mode,
+                created_by=current_user.id
+            ))
 
         sync_customer_current_balance(db, customer)
 
@@ -4360,6 +4153,37 @@ def get_customer_statement(
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    ledger_entries = (
+        db.query(LedgerEntry)
+        .filter(LedgerEntry.customer_id == customer_id)
+        .order_by(LedgerEntry.entry_date.asc(), LedgerEntry.created_at.asc())
+        .all()
+    )
+
+    running_balance = float(customer.opening_balance or 0)
+    ledger_data = []
+    total_debit = 0.0
+    total_credit = 0.0
+
+    for entry in ledger_entries:
+        debit = float(entry.debit or 0)
+        credit = float(entry.credit or 0)
+        total_debit += debit
+        total_credit += credit
+        running_balance += credit - debit
+
+        ledger_data.append({
+            "id": entry.id,
+            "date": entry.entry_date.isoformat() if entry.entry_date else None,
+            "description": entry.description,
+            "debit": debit,
+            "credit": credit,
+            "balance": round(running_balance, 2),
+            "type": entry.entry_type,
+            "payment_mode": entry.payment_mode,
+            "reference_id": entry.reference_id,
+        })
+
     invoices = (
         db.query(InvoiceModel)
         .filter(
@@ -4384,6 +4208,7 @@ def get_customer_statement(
             if invoice.payment_status in ["pending", "partial"]
             else 0.0
         )
+        advance_used = float(invoice.advance_used or 0)
         total_sales += display_total
         total_paid += paid_amount
         total_pending += balance_amount
@@ -4416,7 +4241,7 @@ def get_customer_statement(
             "total": float(invoice.total or 0),
             "display_total": display_total,
             "original_total": display_total,
-            "advance_used": 0.0,
+            "advance_used": advance_used,
             "paid_amount": paid_amount,
             "balance_amount": balance_amount,
             "subtotal": float(invoice.subtotal or 0),
@@ -4433,6 +4258,7 @@ def get_customer_statement(
             "phone": customer.phone,
             "address": customer.address,
             "current_balance": current_balance,
+            "opening_balance": float(customer.opening_balance or 0),
             "total_invoices": len([inv for inv in invoices if inv.payment_status != "cancelled"]),
             "total_bill": round(total_sales, 2),
         },
@@ -4440,14 +4266,11 @@ def get_customer_statement(
             "total_sales": round(total_sales, 2),
             "total_paid": round(total_paid, 2),
             "total_pending": round(total_pending, 2),
-            "total_advance_available": 0.0,
-            "total_advance_in": 0.0,
-            "total_payment_received": round(total_paid, 2),
-            "total_sale_recognized": round(total_sales, 2),
-            "ledger_debit": 0.0,
-            "ledger_credit": 0.0,
+            "total_advance_available": round(abs(current_balance), 2) if current_balance < 0 else 0,
+            "ledger_debit": round(total_debit, 2),
+            "ledger_credit": round(total_credit, 2),
         },
-        "ledger": [],
+        "ledger": list(reversed(ledger_data)),
         "invoices": invoice_data,
     }
 
@@ -4980,10 +4803,18 @@ def create_invoice(
             db
         )
 
-        paid_amount, balance_amount, resolved_payment_status = calculate_invoice_payment_breakdown(
+        requested_payment_status = normalize_draft_payment_status(invoice_data.payment_status)
+        paid_amount, balance_amount = calculate_draft_payment_summary(
             total,
-            invoice_data.payment_status,
+            requested_payment_status,
             invoice_data.paid_amount,
+            advance_used
+        )
+        resolved_payment_status = resolve_invoice_payment_status(
+            requested_payment_status,
+            advance_used,
+            balance_amount,
+            paid_amount,
         )
 
         invoice = InvoiceModel(
@@ -5012,8 +4843,6 @@ def create_invoice(
 
         db.add(invoice)
         db.flush()
-        sale_amount = round(float(invoice.original_total or 0) - float(invoice.advance_used or 0), 2)
-        sale_amount = max(sale_amount, 0.0)
 
         # ================= INVENTORY + TRANSACTION =================
         for item in invoice_items:
@@ -5090,19 +4919,28 @@ def create_invoice(
             invoice.id,
             invoice.invoice_number,
             customer.id,
-            sale_amount,
+            original_total,
+            current_user,
+        )
+
+        add_advance_sale_ledger_entry(
+            db,
+            invoice.id,
+            invoice.invoice_number,
+            customer.id,
+            advance_used,
             current_user,
         )
 
         if paid_amount > 0:
-            add_invoice_payment_record(
-                db,
-                invoice,
-                paid_amount,
-                payment_mode,
-                current_user,
-                payment_date=invoice.created_at.date(),
-            )
+            db.add(InvoicePayment(
+                id=str(uuid.uuid4()),
+                invoice_id=invoice.id,
+                amount=paid_amount,
+                payment_mode=payment_mode,
+                created_by=current_user.id,
+                created_at=datetime.now(IST),
+            ))
 
         sync_customer_current_balance(db, customer)
 
@@ -5127,7 +4965,6 @@ def update_invoice_status(
     payment_status: str,
     payment_mode: str = "cash",
     amount: float = 0,
-    reference: Optional[str] = None,
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -5144,7 +4981,7 @@ def update_invoice_status(
 
     customer = db.query(CustomerModel).filter(
         CustomerModel.id == invoice.customer_id
-    ).with_for_update().first()
+    ).first()
 
     # 🚫 block only for payment actions
     if payment_status in ["paid", "partial"] and invoice.balance_amount <= 0:
@@ -5238,6 +5075,13 @@ def update_invoice_status(
         invoice.paid_amount = 0
         invoice.payment_status = "cancelled"
 
+        advance_entries = db.query(LedgerEntry).filter(
+            LedgerEntry.reference_id == invoice.id,
+            LedgerEntry.entry_type == "advance_used"
+        ).all()
+        for entry in advance_entries:
+            db.delete(entry)
+
         sale_entries = db.query(LedgerEntry).filter(
             LedgerEntry.reference_id == invoice.id,
             LedgerEntry.entry_type == "sale"
@@ -5261,58 +5105,54 @@ def update_invoice_status(
         if amount <= 0:
             raise HTTPException(400, "Amount required")
 
-        ensure_oldest_pending_invoice(db, invoice)
+        remaining = invoice.total - invoice.paid_amount
 
-        allocation_result = allocate_customer_payment(
-            db,
-            customer,
-            amount,
-            payment_mode,
-            current_user,
-            reference=reference,
-        )
+        if amount > remaining:
+            raise HTTPException(400, "Too much amount")
 
-        db.refresh(invoice)
+        invoice.paid_amount += amount
+        invoice.balance_amount = invoice.total - invoice.paid_amount
+        invoice.payment_status = "partial" if invoice.balance_amount > 0 else "paid"
+        invoice.payment_mode = payment_mode
+
+        db.add(InvoicePayment(
+            invoice_id=invoice.id,
+            amount=amount,
+            payment_mode=payment_mode,
+            created_by=current_user.id
+        ))
+
+        sync_customer_current_balance(db, customer)
 
         db.commit()
 
-        return {
-            "message": "Payment recorded successfully",
-            "paid_amount": invoice.paid_amount,
-            "balance_amount": invoice.balance_amount,
-            "payment_status": invoice.payment_status,
-            "cleared_pending": allocation_result["cleared_pending"],
-            "advance_added": allocation_result["advance_added"],
-        }
+        return {"message": "Partial payment updated"}
 
     # ================= PAID =================
     if payment_status == "paid":
 
-        ensure_oldest_pending_invoice(db, invoice)
-        remaining = invoice.balance_amount
+        remaining = invoice.total - invoice.paid_amount
 
         if remaining <= 0:
             raise HTTPException(400, "Already paid")
 
-        allocate_customer_payment(
-            db,
-            customer,
-            remaining,
-            payment_mode,
-            current_user,
-            reference=reference,
-        )
+        invoice.paid_amount = invoice.total
+        invoice.balance_amount = 0
+        invoice.payment_status = "paid"
+        invoice.payment_mode = payment_mode
 
-        db.refresh(invoice)
+        db.add(InvoicePayment(
+            invoice_id=invoice.id,
+            amount=remaining,
+            payment_mode=payment_mode,
+            created_by=current_user.id
+        ))
+
+        sync_customer_current_balance(db, customer)
 
         db.commit()
 
-        return {
-            "message": "Invoice marked as paid",
-            "paid_amount": invoice.paid_amount,
-            "balance_amount": invoice.balance_amount,
-            "payment_status": invoice.payment_status,
-        }
+        return {"message": "Invoice marked as paid"}
 
     raise HTTPException(400, "Invalid status")
 
@@ -5320,7 +5160,6 @@ def update_invoice_status(
 def complete_invoice_payment(
     invoice_id: str,
     payment_mode: str = "cash",
-    reference: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
@@ -5335,26 +5174,33 @@ def complete_invoice_payment(
     if invoice.payment_status == "paid":
         raise HTTPException(400, "Invoice already fully paid")
 
-    ensure_oldest_pending_invoice(db, invoice)
-    balance = invoice.balance_amount
+    balance = invoice.total - invoice.paid_amount
 
     if balance <= 0:
         raise HTTPException(400, "No balance remaining")
 
-    customer = db.query(CustomerModel).filter(
-        CustomerModel.id == invoice.customer_id
-    ).with_for_update().first()
+    # UPDATE INVOICE
+    invoice.paid_amount += balance
+    invoice.balance_amount = 0
+    invoice.payment_status = "paid"
+    invoice.payment_mode = payment_mode
 
-    allocate_customer_payment(
-        db,
-        customer,
-        balance,
-        payment_mode,
-        current_user,
-        reference=reference,
+    # STORE PAYMENT HISTORY
+    db.add(
+        InvoicePayment(
+            invoice_id=invoice.id,
+            amount=balance,
+            payment_mode=payment_mode,
+            created_by=current_user.id
+        )
     )
 
-    db.refresh(invoice)
+    # UPDATE CUSTOMER BALANCE
+    customer = db.query(CustomerModel).filter(
+        CustomerModel.id == invoice.customer_id
+    ).first()
+
+    sync_customer_current_balance(db, customer)
 
     db.commit()
 
@@ -5423,27 +5269,42 @@ def add_payment_to_invoice(
     if invoice.payment_status == "paid":
         raise HTTPException(400, "Invoice already fully paid")
 
-    ensure_oldest_pending_invoice(db, invoice)
-
-    remaining_balance = invoice.balance_amount
+    # Calculate remaining balance
+    remaining_balance = invoice.total - invoice.paid_amount
 
     if payment_data.amount > remaining_balance:
         raise HTTPException(400, f"Payment amount exceeds balance of {remaining_balance}")
 
-    customer = db.query(CustomerModel).filter(
-        CustomerModel.id == invoice.customer_id
-    ).with_for_update().first()
+    # Update invoice
+    invoice.paid_amount += payment_data.amount
+    invoice.balance_amount = invoice.total - invoice.paid_amount
 
-    allocate_customer_payment(
-        db,
-        customer,
-        payment_data.amount,
-        payment_data.payment_mode.lower(),
-        current_user,
-        reference=payment_data.reference,
+    # Auto-update payment status
+    if invoice.balance_amount <= 0:
+        invoice.payment_status = "paid"
+        invoice.balance_amount = 0
+    else:
+        invoice.payment_status = "partial"
+
+    # Store payment history
+    db.add(
+        InvoicePayment(
+            id=str(uuid.uuid4()),
+            invoice_id=invoice.id,
+            amount=payment_data.amount,
+            payment_mode=payment_data.payment_mode.lower(),
+            reference=payment_data.reference,
+            created_by=current_user.id,
+            created_at=datetime.now(IST)
+        )
     )
 
-    db.refresh(invoice)
+    # Update customer balance
+    customer = db.query(CustomerModel).filter(
+        CustomerModel.id == invoice.customer_id
+    ).first()
+
+    sync_customer_current_balance(db, customer)
 
     db.commit()
 
@@ -5463,7 +5324,59 @@ def delete_payment(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
-    raise HTTPException(400, "Deleting recorded payments is disabled to preserve the audit trail")
+    
+    payment = db.query(InvoicePayment).filter(
+        InvoicePayment.id == payment_id
+    ).first()
+
+    if not payment:
+        raise HTTPException(404, "Payment not found")
+
+    invoice_id = payment.invoice_id
+    payment_amount = payment.amount
+
+    # Get invoice and lock it
+    invoice = (
+        db.query(InvoiceModel)
+        .filter(InvoiceModel.id == invoice_id)
+        .with_for_update()
+        .first()
+    )
+
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+
+    # Reverse payment
+    invoice.paid_amount -= payment_amount
+    invoice.balance_amount = invoice.total - invoice.paid_amount
+
+    # Update payment status
+    if invoice.paid_amount <= 0:
+        invoice.payment_status = "pending"
+        invoice.paid_amount = 0
+        invoice.balance_amount = invoice.total
+    else:
+        invoice.payment_status = "partial"
+
+    # Update customer balance
+    customer = db.query(CustomerModel).filter(
+        CustomerModel.id == invoice.customer_id
+    ).first()
+
+    # Delete payment record
+    db.delete(payment)
+
+    sync_customer_current_balance(db, customer)
+
+    db.commit()
+
+    return {
+        "message": "Payment deleted and reversed",
+        "invoice_number": invoice.invoice_number,
+        "paid_amount": invoice.paid_amount,
+        "balance_amount": invoice.balance_amount,
+        "payment_status": invoice.payment_status
+    }
 @api_router.get(
     "/customers/search",
     response_model=Optional[Customer]
@@ -5613,22 +5526,23 @@ def get_dashboard_stats(
         raise HTTPException(status_code=400, detail="Invalid filter")
 
     # ---------- SALES ----------
-    sales_query = db.query(LedgerEntry).filter(
-        LedgerEntry.entry_type == "sale",
-        LedgerEntry.created_at >= start,
-        LedgerEntry.created_at < end
+    invoice_q = db.query(InvoiceModel).filter(
+        InvoiceModel.invoice_type == "FINAL",
+        InvoiceModel.payment_status == "paid",
+        InvoiceModel.created_at >= start,
+        InvoiceModel.created_at < end
+    
+
     )
 
-    total_sales = sales_query.with_entities(
-        func.coalesce(func.sum(LedgerEntry.credit), 0)
+    total_sales = invoice_q.with_entities(
+        func.coalesce(func.sum(InvoiceModel.total), 0)
     ).scalar()
 
-    total_orders = sales_query.with_entities(
-        func.count(func.distinct(LedgerEntry.reference_id))
-    ).scalar()
+    total_orders = invoice_q.count()
 
-    total_customers = sales_query.with_entities(
-        func.count(func.distinct(LedgerEntry.customer_id))
+    total_customers = invoice_q.with_entities(
+        func.count(func.distinct(InvoiceModel.customer_id))
     ).scalar()
 
     # ---------- LOW STOCK (PARTS ONLY) ----------
@@ -5661,29 +5575,29 @@ def dashboard_today(
 ).count()
 
     total_sales_today = db.query(
-        func.coalesce(func.sum(LedgerEntry.credit), 0)
+        func.coalesce(func.sum(InvoiceModel.total), 0)
     ).filter(
-        LedgerEntry.entry_type == "sale",
-        LedgerEntry.created_at >= start,
-        LedgerEntry.created_at < end
+        InvoiceModel.invoice_type == "FINAL",
+        InvoiceModel.created_at >= start,
+        InvoiceModel.created_at < end
     ).scalar()
 
     cash_sales_today = db.query(
-        func.coalesce(func.sum(LedgerEntry.credit), 0)
+        func.coalesce(func.sum(InvoiceModel.total), 0)
     ).filter(
-        LedgerEntry.entry_type == "payment_in",
-        LedgerEntry.created_at >= start,
-        LedgerEntry.created_at < end,
-        LedgerEntry.payment_mode == "cash"
+        InvoiceModel.invoice_type == "FINAL",
+        InvoiceModel.created_at >= start,
+        InvoiceModel.created_at < end,
+        InvoiceModel.payment_mode == "cash"
     ).scalar()
 
     online_sales_today = db.query(
-        func.coalesce(func.sum(LedgerEntry.credit), 0)
+        func.coalesce(func.sum(InvoiceModel.total), 0)
     ).filter(
-        LedgerEntry.entry_type == "payment_in",
-        LedgerEntry.created_at >= start,
-        LedgerEntry.created_at < end,
-        LedgerEntry.payment_mode.in_(["upi", "bank", "cheque"])
+        InvoiceModel.invoice_type == "FINAL",
+        InvoiceModel.created_at >= start,
+        InvoiceModel.created_at < end,
+        InvoiceModel.payment_mode.in_(["upi", "bank", "cheque"])
     ).scalar()
 
 
@@ -5851,13 +5765,15 @@ def hourly_sales_today(
 
     results = (
         db.query(
-            func.hour(LedgerEntry.created_at).label("hour"),
-            func.sum(LedgerEntry.credit).label("total")
+            func.hour(InvoiceModel.created_at).label("hour"),
+            func.sum(InvoiceModel.total).label("total")
         )
         .filter(
-            LedgerEntry.entry_type == "sale",
-            LedgerEntry.created_at >= start,
-            LedgerEntry.created_at <= now
+            InvoiceModel.invoice_type == "FINAL",
+
+            InvoiceModel.created_at >= start,
+            InvoiceModel.created_at <= now,
+            InvoiceModel.payment_status == "paid"
         )
         .group_by("hour")
         .order_by("hour")
@@ -5912,39 +5828,18 @@ def get_sales_data(
     else:
         raise HTTPException(status_code=400, detail="Invalid filter")
 
-    sale_rows = (
-        db.query(
-            func.date(LedgerEntry.created_at).label("day"),
-            func.sum(LedgerEntry.credit).label("total"),
-        )
-        .filter(
-            LedgerEntry.entry_type == "sale",
-            LedgerEntry.created_at >= start,
-            LedgerEntry.created_at <= end
-        )
-        .group_by("day")
-        .order_by("day")
-        .all()
-    )
-
-    pending_rows = (
+    results = (
         db.query(
             func.date(InvoiceModel.created_at).label("day"),
-            func.sum(
-                case(
-                    (InvoiceModel.payment_status == "pending", InvoiceModel.balance_amount),
-                    else_=0
-                )
-            ).label("pending"),
-            func.sum(
-                case(
-                    (InvoiceModel.payment_status == "partial", InvoiceModel.balance_amount),
-                    else_=0
-                )
-            ).label("partial"),
+            func.sum(InvoiceModel.total).label("total"),
+            func.sum(case((InvoiceModel.payment_status == "paid", InvoiceModel.total), else_=0)).label("paid"),
+            func.sum(case((InvoiceModel.payment_status == "pending", InvoiceModel.total), else_=0)).label("pending"),
+            func.sum(case((InvoiceModel.payment_status == "partial", InvoiceModel.total), else_=0)).label("partial"),
+
         )
         .filter(
-            InvoiceModel.invoice_type == "FINAL",
+                InvoiceModel.invoice_type == "FINAL",
+
             InvoiceModel.created_at >= start,
             InvoiceModel.created_at <= end
         )
@@ -5953,26 +5848,15 @@ def get_sales_data(
         .all()
     )
 
-    sale_by_day = {row.day: float(row.total or 0) for row in sale_rows}
-    pending_by_day = {
-        row.day: {
-            "pending": float(row.pending or 0),
-            "partial": float(row.partial or 0),
-        }
-        for row in pending_rows
-    }
-
-    all_days = sorted(set(sale_by_day.keys()) | set(pending_by_day.keys()))
-
     return [
         SalesChartItem(
-            name=day.strftime("%d %b"),
-            total=float(sale_by_day.get(day, 0)),
-            paid=float(sale_by_day.get(day, 0)),
-            pending=float(pending_by_day.get(day, {}).get("pending", 0)),
-            partial=float(pending_by_day.get(day, {}).get("partial", 0)),
+            name=row.day.strftime("%d %b"),
+            total=float(row.total or 0),
+            paid=float(row.paid or 0),
+            pending=float(row.pending or 0),
+            partial=float(row.partial or 0),
         )
-        for day in all_days
+        for row in results
     ]
 
 def upload_qr_to_cloudinary(pil_image, folder="qr"):
@@ -6296,10 +6180,8 @@ def accounts_summary(
 
 
     # ================= CUSTOMER OUTSTANDING =================
-    customers = db.query(CustomerModel).all()
-    customers_outstanding = sum(
-        calculate_customer_current_balance(db, customer)
-        for customer in customers
+    customers_outstanding = (
+        db.query(func.sum(CustomerModel.current_balance)).scalar() or 0
     )
 
     # ================= SUPPLIER OUTSTANDING =================
@@ -6323,72 +6205,6 @@ def accounts_summary(
         "suppliers_outstanding": float(suppliers_outstanding),
         "pending_cheques": float(pending_cheques),
     }
-
-
-@api_router.post("/accounts/reset-ledger")
-def reset_ledger_accounting(
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can reset ledger accounting")
-
-    try:
-        db.query(LedgerEntry).delete(synchronize_session=False)
-        db.query(CustomerModel).update(
-            {CustomerModel.current_balance: 0},
-            synchronize_session=False
-        )
-        db.commit()
-        return {"message": "Ledger reset successfully", "customers_reset": True}
-    except Exception as e:
-        db.rollback()
-        raise e
-
-
-@api_router.post("/accounts/reconcile-customer-ledger")
-def reconcile_customer_ledger(
-    customer_id: Optional[str] = None,
-    invoice_id: Optional[str] = None,
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can reconcile ledger")
-
-    try:
-        invoice_query = db.query(InvoiceModel).filter(InvoiceModel.invoice_type == "FINAL")
-
-        if customer_id:
-            invoice_query = invoice_query.filter(InvoiceModel.customer_id == customer_id)
-        if invoice_id:
-            invoice_query = invoice_query.filter(InvoiceModel.id == invoice_id)
-
-        invoices = invoice_query.order_by(InvoiceModel.created_at.asc(), InvoiceModel.id.asc()).all()
-
-        touched_customers = set()
-        for invoice in invoices:
-            rebuild_invoice_accounting_entries(db, invoice, current_user)
-            if invoice.customer_id:
-                touched_customers.add(invoice.customer_id)
-
-        if customer_id:
-            touched_customers.add(customer_id)
-
-        customers = db.query(CustomerModel).filter(CustomerModel.id.in_(list(touched_customers))).all() if touched_customers else []
-        for customer in customers:
-            sync_customer_current_balance(db, customer)
-
-        db.commit()
-
-        return {
-            "message": "Customer ledger reconciled successfully",
-            "invoices_rebuilt": len(invoices),
-            "customers_synced": len(customers),
-        }
-    except Exception as e:
-        db.rollback()
-        raise e
 
 @api_router.get("/suppliers")
 def get_suppliers(
@@ -6457,25 +6273,16 @@ def cashbook(
 
     total = base_query.count()
 
-    rows = (
-        base_query.order_by(
-            LedgerEntry.entry_date.desc(),
-            LedgerEntry.created_at.desc(),
-            LedgerEntry.id.desc(),
-        )
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
+    rows = base_query.order_by(
+        LedgerEntry.entry_date.desc()
+    ).offset((page - 1) * limit).limit(limit).all()
 
-    opening_balance = 0
-    if rows:
-        opening_balance = (
-            base_query.filter(_older_ledger_entries_filter(rows[-1]))
-            .with_entities(func.coalesce(func.sum(LedgerEntry.credit - LedgerEntry.debit), 0))
-            .scalar()
-            or 0
-        )
+    opening_balance = db.query(
+        func.coalesce(func.sum(LedgerEntry.credit - LedgerEntry.debit), 0)
+    ).filter(
+        LedgerEntry.payment_mode == "cash",
+        LedgerEntry.entry_date < rows[-1].entry_date if rows else None
+    ).scalar() or 0
 
     balance = opening_balance
     data = []
@@ -6526,25 +6333,20 @@ def bankbook(
 
     total = base_query.count()
 
-    rows = (
-        base_query.order_by(
-            LedgerEntry.entry_date.desc(),
-            LedgerEntry.created_at.desc(),
-            LedgerEntry.id.desc(),
-        )
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
+    rows = base_query.order_by(
+        LedgerEntry.entry_date.desc()
+    ).offset((page - 1) * limit).limit(limit).all()
 
-    opening_balance = 0
-    if rows:
-        opening_balance = (
-            base_query.filter(_older_ledger_entries_filter(rows[-1]))
-            .with_entities(func.coalesce(func.sum(LedgerEntry.credit - LedgerEntry.debit), 0))
-            .scalar()
-            or 0
-        )
+    opening_balance = db.query(
+        func.coalesce(func.sum(LedgerEntry.credit - LedgerEntry.debit), 0)
+    ).filter(
+        or_(
+            LedgerEntry.payment_mode == "bank",
+            LedgerEntry.payment_mode == "upi",
+            LedgerEntry.payment_mode == "cheque"
+        ),
+        LedgerEntry.entry_date < rows[-1].entry_date if rows else None
+    ).scalar() or 0
 
     balance = opening_balance
     data = []
@@ -6645,18 +6447,19 @@ def profit_loss(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
-    query_income = db.query(func.sum(LedgerEntry.credit)).filter(
-        LedgerEntry.entry_type == "sale"
+    # Count all FINAL invoices (pending and paid both count as income)
+    query_income = db.query(func.sum(InvoiceModel.total)).filter(
+        InvoiceModel.invoice_type == "FINAL"
     )
-
+    
     query_expense = db.query(func.sum(ExpenseModel.amount))
 
     if start_date:
-        query_income = query_income.filter(LedgerEntry.entry_date >= start_date)
+        query_income = query_income.filter(func.date(InvoiceModel.created_at) >= start_date)
         query_expense = query_expense.filter(ExpenseModel.expense_date >= start_date)
     
     if end_date:
-        query_income = query_income.filter(LedgerEntry.entry_date <= end_date)
+        query_income = query_income.filter(func.date(InvoiceModel.created_at) <= end_date)
         query_expense = query_expense.filter(ExpenseModel.expense_date <= end_date)
 
     income = query_income.scalar() or 0
@@ -6675,22 +6478,79 @@ def payment_in(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
+    advance_payload = AdvancePaymentRequest(
+        customer_id=data.customer_id,
+        amount=data.amount,
+        payment_mode=data.payment_mode,
+        payment_date=data.payment_date,
+        cheque_number=data.cheque_number,
+        cheque_date=data.cheque_date,
+        bank_name=data.bank_name,
+    )
+    return add_advance_payment(advance_payload, db, current_user)
+
+
+@api_router.post("/payments/advance")
+def add_advance_payment(
+    data: AdvancePaymentRequest,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
     if data.amount <= 0:
-        raise HTTPException(400, "Payment amount must be greater than 0")
+        raise HTTPException(400, "Advance amount must be greater than 0")
 
     payment_mode = normalize_draft_payment_mode(data.payment_mode)
-    customer = db.query(CustomerModel).filter(CustomerModel.id == data.customer_id).with_for_update().first()
+    customer = db.query(CustomerModel).filter(CustomerModel.id == data.customer_id).first()
     if not customer:
         raise HTTPException(404, "Customer not found")
 
     payment_date = data.payment_date or datetime.now(IST).date()
     received_amount = round(float(data.amount), 2)
-    pending_total = round(float(calculate_customer_current_balance(db, customer) or 0), 2)
+    pending_invoices = (
+        db.query(InvoiceModel)
+        .filter(
+            InvoiceModel.customer_id == customer.id,
+            InvoiceModel.invoice_type == "FINAL",
+            InvoiceModel.payment_status.in_(["pending", "partial"]),
+            InvoiceModel.balance_amount > 0,
+        )
+        .order_by(InvoiceModel.created_at.asc())
+        .all()
+    )
 
-    if pending_total <= 0:
-        raise HTTPException(400, "Customer has no pending invoices")
-    if received_amount > pending_total:
-        raise HTTPException(400, f"Payment amount cannot exceed pending amount of {pending_total:.2f}")
+    remaining_to_allocate = received_amount
+    cleared_pending = 0.0
+
+    for invoice in pending_invoices:
+        if remaining_to_allocate <= 0:
+            break
+
+        invoice_balance = round(float(invoice.balance_amount or 0), 2)
+        if invoice_balance <= 0:
+            continue
+
+        allocation = round(min(invoice_balance, remaining_to_allocate), 2)
+        if allocation <= 0:
+            continue
+
+        invoice.paid_amount = round(float(invoice.paid_amount or 0) + allocation, 2)
+        invoice.balance_amount = round(invoice_balance - allocation, 2)
+        invoice.payment_status = "paid" if invoice.balance_amount <= 0 else "partial"
+        invoice.payment_mode = payment_mode
+
+        db.add(InvoicePayment(
+            id=str(uuid.uuid4()),
+            invoice_id=invoice.id,
+            amount=allocation,
+            payment_mode=payment_mode,
+            created_by=current_user.id,
+            created_at=datetime.now(IST),
+        ))
+
+        cleared_pending = round(cleared_pending + allocation, 2)
+        remaining_to_allocate = round(remaining_to_allocate - allocation, 2)
+
+    remaining_advance = round(max(received_amount - cleared_pending, 0), 2)
 
     if payment_mode == "cheque" and data.cheque_number:
         cheque = ChequeModel(
@@ -6708,36 +6568,37 @@ def payment_in(
         )
         db.add(cheque)
 
-    allocation_result = allocate_customer_payment(
-        db,
-        customer,
-        received_amount,
-        payment_mode,
-        current_user,
-        payment_date=payment_date,
-        reference=data.reference,
-    )
+    if remaining_advance > 0:
+        db.add(
+            LedgerEntry(
+                id=str(uuid.uuid4()),
+                entry_type="advance_in",
+                reference_id=data.customer_id,
+                customer_id=data.customer_id,
+                description=f"Advance received from {customer.name}",
+                debit=0,
+                credit=remaining_advance,
+                payment_mode=payment_mode,
+                entry_date=payment_date,
+                created_by=current_user.id,
+                created_by_name=current_user.name,
+                created_at=datetime.now(IST)
+            )
+        )
+
+    sync_customer_current_balance(db, customer)
 
     db.commit()
 
     return {
-        "message": "Payment received successfully",
+        "message": "Advance received successfully",
         "customer_id": customer.id,
         "customer_name": customer.name,
         "amount": received_amount,
-        "cleared_pending": allocation_result["cleared_pending"],
-        "advance_added": 0.0,
-        "current_balance": allocation_result["current_balance"]
+        "cleared_pending": cleared_pending,
+        "advance_added": remaining_advance,
+        "current_balance": float(customer.current_balance or 0)
     }
-
-
-@api_router.post("/payments/advance")
-def add_advance_payment(
-    data: AdvancePaymentRequest,
-    db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
-):
-    raise HTTPException(400, "Advance payments have been removed")
 
 @api_router.post("/accounts/payment-out")
 def payment_out(
@@ -6799,8 +6660,6 @@ def get_cheques(
     status: Optional[str] = None,
     page: int = 1,
     limit: int = 20,
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
     current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -6808,10 +6667,6 @@ def get_cheques(
     
     if status:
         query = query.filter(ChequeModel.status == status)
-    if start_date:
-        query = query.filter(ChequeModel.cheque_date >= start_date)
-    if end_date:
-        query = query.filter(ChequeModel.cheque_date <= end_date)
 
     total = query.count()
     
@@ -6898,36 +6753,23 @@ def general_ledger(
 
     query = base_query.order_by(
         LedgerEntry.entry_date.desc(),
-        LedgerEntry.created_at.desc(),
-        LedgerEntry.id.desc(),
+        LedgerEntry.created_at.desc()
     )
 
     entries = query.offset((page - 1) * limit).limit(limit).all()
 
     # ðŸ”¹ Opening balance before this page
-    prior_entries = []
-    if entries:
-        prior_entries = (
-            base_query
-            .filter(_older_ledger_entries_filter(entries[-1]))
-            .order_by(
-                LedgerEntry.entry_date.asc(),
-                LedgerEntry.created_at.asc(),
-                LedgerEntry.id.asc(),
-            )
-            .all()
-        )
-
-    opening_balance = round(
-        sum(get_general_ledger_balance_impact(entry) for entry in prior_entries),
-        2
-    )
+    opening_balance = db.query(
+        func.coalesce(func.sum(LedgerEntry.credit - LedgerEntry.debit), 0)
+    ).filter(
+        LedgerEntry.entry_date < entries[-1].entry_date if entries else None
+    ).scalar() or 0
 
     balance = opening_balance
     data = []
 
     for e in reversed(entries):
-        balance = round(balance + get_general_ledger_balance_impact(e), 2)
+        balance += e.credit - e.debit
 
         data.insert(0, {
             "id": e.id,
@@ -6966,8 +6808,6 @@ def customer_ledger(
     if not customer:
         raise HTTPException(404, "Customer not found")
 
-    current_balance = calculate_customer_current_balance(db, customer)
-
     query = db.query(LedgerEntry).filter(LedgerEntry.customer_id == customer_id)
 
     if start_date:
@@ -6983,18 +6823,7 @@ def customer_ledger(
     result = []
 
     for e in entries:
-        impact = 0.0
-
-        if e.entry_type == "sale":
-            impact = float(e.credit or 0)
-        elif e.entry_type == "payment_in":
-            impact = -float(e.credit or 0)
-        elif e.entry_type == "advance_in":
-            impact = -float(e.credit or 0)
-        else:
-            impact = float(e.debit or 0) - float(e.credit or 0)
-
-        balance = round(float(balance or 0) + impact, 2)
+        balance += e.debit - e.credit
 
         result.append({
             "date": e.entry_date.isoformat() if e.entry_date else None,
@@ -7010,7 +6839,7 @@ def customer_ledger(
             "id": customer.id,
             "name": customer.name,
             "phone": customer.phone,
-            "current_balance": current_balance
+            "current_balance": customer.current_balance
         },
         "data": result,
         "pagination": {

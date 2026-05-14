@@ -1,11 +1,13 @@
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useAuth } from "@/context/AuthContext"
 
 import {
   LayoutDashboard,
   Package,
   Users,
+  User,
+  Building2,
   FileText,
   FolderTree,
   ClipboardList,
@@ -31,10 +33,29 @@ const Layout = () => {
 const currentTab = location.state?.tab || "create"
   const [collapsed, setCollapsed] = useState(false)
   const [mobileMenu, setMobileMenu] = useState(false)
-  const navItems = [
+  const searchParams = new URLSearchParams(location.search)
+  const currentPeopleTab = searchParams.get("tab") === "suppliers" ? "suppliers" : "customers"
+  const isPeopleRoute = location.pathname === "/customers" || location.pathname === "/employees"
+  const [peopleOpen, setPeopleOpen] = useState(isPeopleRoute)
+
+  useEffect(() => {
+    if (isPeopleRoute) {
+      setPeopleOpen(true)
+    }
+  }, [isPeopleRoute])
+
+  const primaryNavItems = [
     { path: "/", icon: LayoutDashboard, label: "Dashboard" },
     { path: "/products", icon: Package, label: "Products" },
-    { path: "/customers", icon: Users, label: "Customers" },
+  ]
+
+  const peopleItems = [
+    { key: "customers", to: "/customers?tab=customers", icon: User, label: "Customers" },
+    { key: "suppliers", to: "/customers?tab=suppliers", icon: Building2, label: "Suppliers" },
+    { key: "employees", to: "/employees", icon: Users, label: "Employees" },
+  ]
+
+  const secondaryNavItems = [
     { path: "/requirements", icon: ClipboardList, label: "Requirements" },
     { path: "/invoices", icon: FileText, label: "Invoices" },
     { path: "/categories", icon: FolderTree, label: "Categories" },
@@ -44,7 +65,7 @@ const currentTab = location.state?.tab || "create"
 
   const bottomNav = [
     { path: "/products", icon: Package, label: "Products" },
-    { path: "/customers", icon: Users, label: "Customers" },
+    { path: "/customers", to: "/customers?tab=customers", icon: Users, label: "People" },
     { path: "/inventory", icon: FolderTree, label: "Inventory" },
     { path: "/requirements", icon: ClipboardList, label: "Needs" },
   ]
@@ -58,9 +79,64 @@ const isInvoicePage =
   location.pathname === "/invoicecreateCompact"
 const isProductsPage = location.pathname === "/products"
 const isCustomersPage = location.pathname === "/customers"
+const isEmployeesPage = location.pathname === "/employees"
 const isCategoriesPage = location.pathname === "/categories"
+  const handleFabClick = () => {
+    if (location.pathname === "/customers") {
+      const targetTab = currentPeopleTab === "suppliers" ? "suppliers" : "customers"
+      navigate(`/customers?tab=${targetTab}&action=add`)
+      return
+    }
+
+    if (location.pathname === "/employees") {
+      navigate("/employees?action=add")
+      return
+    }
+
+    if (location.pathname === "/products") {
+      navigate("/products?action=add")
+      return
+    }
+
+    if (location.pathname === "/categories") {
+      navigate("/categories?action=add")
+      return
+    }
+
+    navigate("/invoices", { state: { tab: "create" } })
+  }
+  const currentPeopleLabel =
+    location.pathname === "/employees"
+      ? "Employees"
+      : currentPeopleTab === "suppliers"
+        ? "Suppliers"
+        : "Customers"
   const currentPage =
-  navItems.find((item) => item.path === location.pathname)?.label || "Outrans"
+    isPeopleRoute
+      ? currentPeopleLabel
+      : [...primaryNavItems, ...secondaryNavItems].find((item) => item.path === location.pathname)?.label || "Outrans"
+
+  const isPeopleItemActive = (key) => {
+    if (key === "customers") {
+      return location.pathname === "/customers" && currentPeopleTab !== "suppliers"
+    }
+
+    if (key === "suppliers") {
+      return location.pathname === "/customers" && currentPeopleTab === "suppliers"
+    }
+
+    return location.pathname === "/employees"
+  }
+
+  const handlePeopleToggle = () => {
+    if (collapsed) {
+      setCollapsed(false)
+      setPeopleOpen(true)
+      return
+    }
+
+    setPeopleOpen((prev) => !prev)
+  }
 
   return (
     <ToastProvider>
@@ -170,12 +246,9 @@ const isCategoriesPage = location.pathname === "/categories"
             </button>
           </div>
         ) : isCustomersPage ? (
-          <button
-            onClick={() => navigate("/customers?action=add")}
-            className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-white"
-          >
-            <Plus className="h-5 w-5" />
-          </button>
+          <div className="w-10" />
+        ) : isEmployeesPage ? (
+          <div className="w-10" />
         ) : isCategoriesPage ? (
           <button
             onClick={() => navigate("/categories?action=add")}
@@ -234,7 +307,75 @@ const isCategoriesPage = location.pathname === "/categories"
 
               <nav className="space-y-2">
 
-                {navItems.map((item) => {
+                {primaryNavItems.map((item) => {
+
+                  const Icon = item.icon
+                  const active = location.pathname === item.path
+
+                  return (
+                    <button
+                      key={item.path}
+                      onClick={() => {
+                        navigate(item.path)
+                        setMobileMenu(false)
+                      }}
+                      className={`flex items-center gap-3 w-full px-3 py-3 rounded-lg transition ${
+                        active
+                          ? "bg-primary text-white"
+                          : "hover:bg-muted"
+                      }`}
+                    >
+                      <Icon className="w-5 h-5" />
+                      {item.label}
+                    </button>
+                  )
+                })}
+
+                <div className="rounded-xl border border-white/5 bg-white/[0.02]">
+                  <button
+                    onClick={() => setPeopleOpen((prev) => !prev)}
+                    className={`flex w-full items-center gap-3 px-3 py-3 rounded-xl transition ${
+                      isPeopleRoute
+                        ? "bg-primary text-white"
+                        : "text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    <Users className="w-5 h-5" />
+                    <span className="flex-1 text-left">People</span>
+                    <ChevronRight
+                      className={`h-4 w-4 transition-transform ${peopleOpen ? "rotate-90" : ""}`}
+                    />
+                  </button>
+
+                  {peopleOpen && (
+                    <div className="space-y-1 px-2 pb-2">
+                      {peopleItems.map((item) => {
+                        const Icon = item.icon
+                        const active = isPeopleItemActive(item.key)
+
+                        return (
+                          <button
+                            key={item.key}
+                            onClick={() => {
+                              navigate(item.to)
+                              setMobileMenu(false)
+                            }}
+                            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
+                              active
+                                ? "bg-primary/15 text-primary"
+                                : "text-muted-foreground hover:bg-muted"
+                            }`}
+                          >
+                            <Icon className="h-4 w-4" />
+                            {item.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {secondaryNavItems.map((item) => {
 
                   const Icon = item.icon
                   const active = location.pathname === item.path
@@ -290,7 +431,73 @@ const isCategoriesPage = location.pathname === "/categories"
 
           <nav className="flex-1 p-2 space-y-1">
 
-            {navItems.map((item) => {
+            {primaryNavItems.map((item) => {
+
+              const Icon = item.icon
+              const active = location.pathname === item.path
+
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={`flex items-center gap-3 px-3 py-3 rounded-md ${
+                    active
+                      ? "bg-primary text-white"
+                      : "hover:bg-muted text-muted-foreground"
+                  }`}
+                >
+                  <Icon className="w-5 h-5" />
+                  {!collapsed && item.label}
+                </Link>
+              )
+            })}
+
+            <div className="space-y-1">
+              <button
+                onClick={handlePeopleToggle}
+                className={`flex w-full items-center gap-3 rounded-md px-3 py-3 transition ${
+                  isPeopleRoute
+                    ? "bg-primary text-white"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <Users className="w-5 h-5 shrink-0" />
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">People</span>
+                    <ChevronRight
+                      className={`h-4 w-4 transition-transform ${peopleOpen ? "rotate-90" : ""}`}
+                    />
+                  </>
+                )}
+              </button>
+
+              {!collapsed && peopleOpen && (
+                <div className="space-y-1 pl-4">
+                  {peopleItems.map((item) => {
+                    const Icon = item.icon
+                    const active = isPeopleItemActive(item.key)
+
+                    return (
+                      <Link
+                        key={item.key}
+                        to={item.to}
+                        className={`flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition ${
+                          active
+                            ? "bg-primary/15 text-primary"
+                            : "text-muted-foreground hover:bg-muted"
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                        {item.label}
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {secondaryNavItems.map((item) => {
 
               const Icon = item.icon
               const active = location.pathname === item.path
@@ -347,7 +554,7 @@ const isCategoriesPage = location.pathname === "/categories"
       return (
         <Link
           key={item.path}
-          to={item.path}
+          to={item.to || item.path}
           className={`flex flex-col items-center text-xs transition ${
             active ? "text-primary scale-110" : "text-muted-foreground"
           }`}
@@ -360,7 +567,7 @@ const isCategoriesPage = location.pathname === "/categories"
 
     {/* CENTER BUTTON */}
     <button
-onClick={() => navigate("/invoices", { state: { tab: "create" } })}   
+ onClick={handleFabClick}
    className="absolute left-1/2 -translate-x-1/2 -top-6 bg-primary text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition"
 
     >

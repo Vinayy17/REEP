@@ -57,6 +57,15 @@ const tabButtonClass = isActive =>
 
 const isNativePlatform = () => Capacitor.isNativePlatform()
 
+const floatingCardClass =
+  "rounded-2xl border border-white/10 bg-slate-950/35 backdrop-blur-md shadow-[0_18px_40px_rgba(15,23,42,0.18)]"
+
+const floatingInnerPanelClass =
+  "rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-sm shadow-[0_14px_28px_rgba(15,23,42,0.14)]"
+
+const floatingSoftRowClass =
+  "rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-sm"
+
 export default function Inventory() {
   const [activeTab, setActiveTab] = useState("report")
 
@@ -436,7 +445,7 @@ const downloadInventoryPdf = async () => {
 
       {activeTab === "report" && (
         <div className="space-y-4">
-          <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+          <Card className={floatingCardClass}>
             <CardContent className="space-y-2 p-3">
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -497,7 +506,7 @@ const downloadInventoryPdf = async () => {
           </Card>
 
           {reportLoading ? (
-            <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+            <Card className={floatingCardClass}>
               <CardContent className="flex min-h-[220px] items-center justify-center">
                 <div className="flex items-center gap-3 text-sm text-slate-300">
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -506,7 +515,7 @@ const downloadInventoryPdf = async () => {
               </CardContent>
             </Card>
           ) : reportCategories.length === 0 ? (
-            <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+            <Card className={floatingCardClass}>
               <CardContent className="flex min-h-[220px] flex-col items-center justify-center gap-2 text-center">
                 <PackageSearch className="h-10 w-10 text-slate-300" />
                 <div className="text-base font-semibold text-white">No products found</div>
@@ -522,7 +531,7 @@ const downloadInventoryPdf = async () => {
                   key={category.category_id}
                   type="button"
                   onClick={() => setActiveCategory(category.category_id)}
-                  className="group rounded-2xl border border-slate-800 bg-gradient-to-br from-[#0f172f] to-[#0b1023] p-2.5 text-left shadow-lg shadow-black/20 transition hover:border-indigo-500/60 hover:shadow-indigo-950/40"
+                  className="group rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(15,23,42,0.52),rgba(15,23,42,0.26))] p-2.5 text-left shadow-[0_16px_30px_rgba(15,23,42,0.16)] backdrop-blur-md transition hover:border-indigo-500/50 hover:shadow-[0_20px_36px_rgba(79,70,229,0.14)]"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -545,7 +554,7 @@ const downloadInventoryPdf = async () => {
                     <CompactBadge label="Low" value={category.low_stock_count} highlight="red" />
                   </div>
 
-                  <div className="mt-2.5 flex items-center justify-between rounded-xl border border-slate-800 bg-black/20 px-2 py-1.5">
+                  <div className={`mt-2.5 flex items-center justify-between px-2 py-1.5 ${floatingSoftRowClass}`}>
                     <span className="text-[10px] font-medium text-slate-400">
                       Largest categories first
                     </span>
@@ -561,7 +570,7 @@ const downloadInventoryPdf = async () => {
       )}
 
       {(activeTab === "inward" || activeTab === "outward") && (
-        <Card className="max-w-3xl rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+        <Card className={`max-w-3xl ${floatingCardClass}`}>
           <CardHeader>
             <CardTitle className="text-lg font-semibold text-white">
               {activeTab === "inward" ? "Material Inward" : "Material Outward"}
@@ -582,7 +591,7 @@ const downloadInventoryPdf = async () => {
             </div>
 
             {lookupData && (
-              <div className="space-y-3 rounded-2xl border border-slate-800 bg-[#0f172f] p-4">
+              <div className={`space-y-3 p-4 ${floatingInnerPanelClass}`}>
                 <div>
                   <div className="text-lg font-semibold text-white">{lookupData.product_name}</div>
                   <div className="text-sm text-slate-300">
@@ -599,7 +608,7 @@ const downloadInventoryPdf = async () => {
                 ).map(variant => (
                   <div
                     key={variant.v_sku}
-                    className="space-y-3 rounded-2xl border border-slate-700 bg-[#0b1023] p-4"
+                    className={`space-y-3 p-4 ${floatingInnerPanelClass}`}
                   >
                     <div className="flex items-center justify-between gap-4">
                       <span className="font-mono text-sm font-semibold text-slate-100">
@@ -648,7 +657,7 @@ const downloadInventoryPdf = async () => {
       )}
 
       {activeTab === "history" && (
-        <Card className="rounded-2xl border border-slate-800 bg-[#0b1023] shadow-lg shadow-black/20">
+        <Card className={floatingCardClass}>
           <CardHeader>
             <CardTitle className="text-lg font-semibold text-white">
               Transaction History
@@ -696,7 +705,7 @@ const downloadInventoryPdf = async () => {
 
                 <tbody>
                   {filteredTransactions.map(transaction => (
-                    <tr key={transaction.id} className="border-b border-slate-800 last:border-b-0">
+                    <tr key={transaction.id} className="border-b border-white/10 last:border-b-0">
                       <td className="px-3 py-3">{new Date(transaction.created_at).toLocaleString()}</td>
                       <td
                         className={`px-3 py-3 font-semibold ${
@@ -754,10 +763,10 @@ const downloadInventoryPdf = async () => {
           if (!open) setActiveCategory(null)
         }}
       >
-        <DialogContent className="max-h-[92vh] max-w-4xl overflow-hidden rounded-2xl border border-slate-800 bg-[#060b1a] p-0 text-slate-100">
+        <DialogContent className="max-h-[92vh] max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-[#060b1a]/95 p-0 text-slate-100 backdrop-blur-xl">
           {activeCategoryData && (
             <>
-              <DialogHeader className="border-b border-slate-800 bg-gradient-to-r from-[#101935] to-[#0b1023] px-4 py-4 sm:px-5">
+              <DialogHeader className="border-b border-white/10 bg-[linear-gradient(135deg,rgba(15,23,42,0.72),rgba(15,23,42,0.38))] px-4 py-4 backdrop-blur-md sm:px-5">
                 <DialogTitle className="text-left text-base font-bold text-white sm:text-lg">
                   {activeCategoryData.category_name}
                 </DialogTitle>
@@ -770,7 +779,7 @@ const downloadInventoryPdf = async () => {
 
               <div className="max-h-[70vh] overflow-y-auto px-3 py-3 sm:px-5">
                 {activeCategoryData.products.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-700 bg-[#0b1023] p-6 text-center text-sm text-slate-300">
+                  <div className="rounded-2xl border border-dashed border-white/10 bg-slate-950/25 p-6 text-center text-sm text-slate-300 backdrop-blur-sm">
                     No products in this category.
                   </div>
                 ) : (
@@ -779,7 +788,7 @@ const downloadInventoryPdf = async () => {
                       {activeCategoryData.products.map(product => (
                         <div
                           key={product.id}
-                          className="rounded-2xl border border-slate-800 bg-[#0b1023] p-2.5 shadow-md shadow-black/20"
+                          className="rounded-2xl border border-white/10 bg-slate-950/30 p-2.5 shadow-[0_14px_26px_rgba(15,23,42,0.14)] backdrop-blur-sm"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
@@ -808,9 +817,9 @@ const downloadInventoryPdf = async () => {
                       ))}
                     </div>
 
-                    <div className="hidden overflow-hidden rounded-2xl border border-slate-800 md:block">
+                    <div className="hidden overflow-hidden rounded-2xl border border-white/10 bg-slate-950/30 backdrop-blur-sm md:block">
                       <table className="min-w-full text-left text-sm">
-                        <thead className="bg-[#111936] text-slate-200">
+                        <thead className="bg-white/[0.04] text-slate-200">
                           <tr>
                             <th className="px-4 py-3 font-semibold">Product Name</th>
                             <th className="px-4 py-3 font-semibold">Code</th>
@@ -822,7 +831,7 @@ const downloadInventoryPdf = async () => {
                         </thead>
                         <tbody>
                           {activeCategoryData.products.map(product => (
-                            <tr key={product.id} className="border-t border-slate-800 bg-[#0b1023]">
+                            <tr key={product.id} className="border-t border-white/10 bg-transparent">
                               <td className="px-4 py-3 font-medium text-white">{product.name}</td>
                               <td className="px-4 py-3 font-mono text-slate-300">{product.product_code}</td>
                               <td className="px-4 py-3 font-mono text-slate-300">{product.sku}</td>
@@ -853,7 +862,7 @@ const downloadInventoryPdf = async () => {
 
 function SummaryCard({ title, mobileTitle, value, danger = false }) {
   return (
-    <Card className="rounded-2xl border border-slate-800 bg-gradient-to-br from-[#111936] to-[#0b1023] shadow-lg shadow-black/20">
+    <Card className="rounded-2xl border border-white/10 bg-[linear-gradient(135deg,rgba(15,23,42,0.6),rgba(15,23,42,0.28))] shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur-md">
       <CardContent className="p-2.5 md:p-4">
         <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-400 md:text-xs md:tracking-[0.18em]">
           <span className="md:hidden">{mobileTitle || title}</span>
@@ -873,7 +882,7 @@ function CategoryBadge({ label, value, danger = false, highlight = "default" }) 
       ? "border-red-500/30 bg-red-500/10 text-red-200"
       : highlight === "indigo"
       ? "border-indigo-500/30 bg-indigo-500/15 text-indigo-100"
-      : "border-slate-700 bg-slate-800/80 text-slate-100"
+      : "border-white/10 bg-white/[0.04] text-slate-100"
 
   return (
     <div className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${tone}`}>
@@ -888,7 +897,7 @@ function CompactBadge({ label, value, highlight = "default" }) {
       ? "border-red-500/20 bg-red-500/10 text-red-200"
       : highlight === "indigo"
       ? "border-indigo-500/20 bg-indigo-500/10 text-indigo-100"
-      : "border-slate-700 bg-slate-800/70 text-slate-100"
+      : "border-white/10 bg-white/[0.04] text-slate-100"
 
   return (
     <div className={`rounded-xl border px-2.5 py-2 ${tone}`}>
@@ -900,7 +909,7 @@ function CompactBadge({ label, value, highlight = "default" }) {
 
 function MiniStat({ label, value, className = "" }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-[#111936] px-2 py-1.5">
+    <div className="rounded-xl border border-white/10 bg-white/[0.04] px-2 py-1.5 backdrop-blur-sm">
       <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{label}</div>
       <div className={`mt-1 truncate text-xs font-semibold text-slate-100 ${className}`}>
         {value}

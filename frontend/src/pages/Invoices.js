@@ -22,10 +22,15 @@ import { buildInvoicePrintHtml } from "@/lib/invoicePrintTemplate"
 
 const API = `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
 
+const RUPEE_SYMBOL = "\u20B9"
+
 const formatCurrency = (amount, decimals = 2) => {
   const num = typeof amount === "number" ? amount : Number(amount)
   return isNaN(num) ? "0.00" : num.toFixed(decimals)
 }
+
+const formatDisplayCurrency = (amount, decimals = 2) =>
+  `${RUPEE_SYMBOL}\u00A0${formatCurrency(amount, decimals)}`
 
 const generateManualSku = () =>
   `MANUAL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -67,15 +72,44 @@ const getAdvanceAmount = (balance) => Math.max(-normalizeCustomerBalance(balance
 const getCustomerBalanceText = (balance) => {
   const pending = getPendingAmount(balance)
   if (pending > 0) {
-    return `Pending balance: Rs. ${formatCurrency(pending)}`
+    return `Pending balance: ${formatDisplayCurrency(pending)}`
   }
 
   const advance = getAdvanceAmount(balance)
   if (advance > 0) {
-    return `Advance available: Rs. ${formatCurrency(advance)}`
+    return `Advance available: ${formatDisplayCurrency(advance)}`
   }
 
   return "No pending or advance balance"
+}
+
+const PAYMENT_STATUS_VALUES = new Set(["pending", "paid", "partial", "cancelled"])
+const PAYMENT_MODE_VALUES = new Set(["cash", "upi", "bank", "cheque"])
+
+const normalizePaymentStatus = (value, fallback = "pending") => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+
+  return PAYMENT_STATUS_VALUES.has(normalized) ? normalized : fallback
+}
+
+const normalizePaymentMode = (value, fallback = "upi") => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+
+  if (PAYMENT_MODE_VALUES.has(normalized)) {
+    return normalized
+  }
+
+  if (normalized === "card") {
+    return "bank"
+  }
+
+  return fallback
 }
 
 const invoiceMatchesSearch = (invoice, rawSearch) => {
@@ -141,13 +175,13 @@ export default function Invoice() {
   const [limit, setLimit] = useState(10)
   const [pagination, setPagination] = useState({ page: 1, total_pages: 1 })
   const [discount, setDiscount] = useState(0)
-  const [paymentStatus, setPaymentStatus] = useState("")
+  const [paymentStatus, setPaymentStatus] = useState("pending")
   const [paidAmount, setPaidAmount] = useState(0)
   // Empty = required selection
   const [combos, setCombos] = useState([])
   const [comboModal, setComboModal] = useState(false)
   const [drafts, setDrafts] = useState([])
-  const [paymentMode, setPaymentMode] = useState("cash")
+  const [paymentMode, setPaymentMode] = useState("upi")
   const [productSearch, setProductSearch] = useState("")
   const [searchResults, setSearchResults] = useState([])
   const [showProductSearch, setShowProductSearch] = useState(false)
@@ -160,6 +194,8 @@ export default function Invoice() {
   const INVOICE_STORAGE_KEY = "invoice_draft_state"
   const draftToastLock = useRef(false)
   const hasRestoredDraftRef = useRef(false)
+  const draftSaveQueueRef = useRef(Promise.resolve())
+  const draftIdRef = useRef(null)
   const [showManualDialog, setShowManualDialog] = useState(false)
   const [manualItem, setManualItem] = useState({
     name: "",
@@ -177,7 +213,7 @@ export default function Invoice() {
   const [useAdvance, setUseAdvance] = useState(false)
   const [draftId, setDraftId] = useState(null)
   const [isDraft, setIsDraft] = useState(false)
-  const location = useLocation() // ✅ ADD THIS LINE
+  const location = useLocation() // âœ… ADD THIS LINE
 
   // Invoice fields
   const [lineItems, setLineItems] = useState([])
@@ -206,17 +242,17 @@ export default function Invoice() {
     { label: "", amount: "" }
   ])
 
-  // ✅ NEW: Payment Modal States
+  // âœ… NEW: Payment Modal States
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false)
   const [paymentHistory, setPaymentHistory] = useState([])
   const [paymentAmount, setPaymentAmount] = useState("")
-  const [paymentModeSelected, setPaymentModeSelected] = useState("cash")
+  const [paymentModeSelected, setPaymentModeSelected] = useState("upi")
   const [paymentReference, setPaymentReference] = useState("")
   const [loadingPayments, setLoadingPayments] = useState(false)
 
-  // ✅ NEW: Payment Mode Dialog (for marking as paid)
+  // âœ… NEW: Payment Mode Dialog (for marking as paid)
   const [isPaidModeDialogOpen, setIsPaidModeDialogOpen] = useState(false)
-  const [paidPaymentMode, setPaidPaymentMode] = useState("cash")
+  const [paidPaymentMode, setPaidPaymentMode] = useState("upi")
   const [paidPaymentRef, setPaidPaymentRef] = useState("")
   const [pendingPaidInvoiceId, setPendingPaidInvoiceId] = useState(null)
 
@@ -226,14 +262,16 @@ export default function Invoice() {
   const appliedAdvance = useAdvance ? Math.min(advanceAvailable, Math.max(total, 0)) : 0
   const payableTotal = Math.max(total - appliedAdvance, 0)
   const isAdvanceCovered = appliedAdvance > 0 && payableTotal <= 0
+  const normalizedPaymentStatus = normalizePaymentStatus(paymentStatus)
+  const normalizedPaymentMode = normalizePaymentMode(paymentMode)
   const effectivePaymentStatus = isAdvanceCovered
     ? "paid"
     : (
-        paymentStatus === "paid"
+        normalizedPaymentStatus === "paid"
           ? "paid"
-          : (paymentStatus === "partial" || appliedAdvance > 0
+          : (normalizedPaymentStatus === "partial" || appliedAdvance > 0
               ? "partial"
-              : (paymentStatus || "pending"))
+              : normalizedPaymentStatus)
       )
   const remainingBalance = Math.max(
     effectivePaymentStatus === "partial"
@@ -263,7 +301,7 @@ export default function Invoice() {
     .filter(c => c.label || c.amount)
     .reduce((sum, c) => sum + Number(c.amount || 0), 0)
 
-  // ✅ NEW: Load Draft Function - Keeps payment status from draft
+  // âœ… NEW: Load Draft Function - Keeps payment status from draft
   // const loadDraft = (draftData) => {
   //   setDraftId(draftData.id)
   //   setCustomerId(draftData.customer_id)
@@ -334,7 +372,7 @@ export default function Invoice() {
       return
     }
 
-    // 🔥 Get ALL variant products
+    // ðŸ”¥ Get ALL variant products
     const variantItems = combo.items.filter(item => item.has_variants)
 
     if (variantItems.length > 0) {
@@ -346,7 +384,7 @@ export default function Invoice() {
         currentIndex: 0
       })
 
-      // 👉 open first variant
+      // ðŸ‘‰ open first variant
       const first = variantItems[0]
 
       setSelectedProductForVariant({
@@ -361,7 +399,7 @@ export default function Invoice() {
       return
     }
 
-    // ✅ No variants
+    // âœ… No variants
     expandComboItems(combo, [])
   }
   const expandComboItems = (combo, selectedVariants) => {
@@ -374,7 +412,7 @@ export default function Invoice() {
 
     const variant = selected?.variant_info
 
-    // ✅ STRONG PRICE FALLBACK (NO ZERO BUG)
+    // âœ… STRONG PRICE FALLBACK (NO ZERO BUG)
     let finalPrice = 0
 
     if (selected?.price && Number(selected.price) > 0) {
@@ -387,7 +425,7 @@ export default function Invoice() {
       finalPrice = Number(item.price)
     }
     else {
-      console.warn("⚠️ PRICE FALLBACK HIT", {
+      console.warn("âš ï¸ PRICE FALLBACK HIT", {
         product: item.product_name,
         selected,
         variant,
@@ -398,7 +436,7 @@ export default function Invoice() {
 
     return {
       product_id: item.product_id,
-      combo_id: combo.id, // ✅ IMPORTANT
+      combo_id: combo.id, // âœ… IMPORTANT
 
       sku: selected?.sku || item.sku || null,
       v_sku: selected?.sku || null,
@@ -435,7 +473,7 @@ export default function Invoice() {
 
   const addToCombo = (product) => {
 
-    // 🔥 IF HAS VARIANTS → ASK USER
+    // ðŸ”¥ IF HAS VARIANTS â†’ ASK USER
     if (product.variants && product.variants.length > 0) {
       setVariantProduct(product)
       setShowVariantDialog(true)
@@ -510,6 +548,7 @@ export default function Invoice() {
       customer_id: customerId,
       customer_name: customerName,
       customer_phone: customerPhone,
+      customer_email: customerEmail,
       customer_address: customerAddress,
       items: cleanedItems,
       gst_enabled: gstEnabled,
@@ -517,36 +556,52 @@ export default function Invoice() {
       discount: Number(discount || 0),
       additional_charges: cleanedAdditionalCharges,
       payment_status: effectivePaymentStatus,
-      payment_mode: paymentMode || "cash",
+      payment_mode: normalizedPaymentMode,
       paid_amount: !isAdvanceCovered && effectivePaymentStatus !== "pending" ? Number(paidAmount || 0) : 0,
       use_advance: Boolean(useAdvance && appliedAdvance > 0),
     }
   }
 
   const persistDraft = async (payload) => {
-    let currentDraftId = draftId
-    let createdNewDraft = false
+    const runSave = async () => {
+      let currentDraftId = draftIdRef.current || draftId
+      let createdNewDraft = false
 
-    if (currentDraftId) {
-      try {
-        await axios.put(`${API}/invoices/draft/${currentDraftId}`, payload)
-        return { id: currentDraftId, createdNewDraft: false }
-      } catch (err) {
-        if (err?.response?.status !== 404) {
-          throw err
+      if (currentDraftId) {
+        try {
+          const res = await axios.put(`${API}/invoices/draft/${currentDraftId}`, payload)
+          const savedDraftId = res?.data?.id || currentDraftId
+          draftIdRef.current = savedDraftId
+          if (savedDraftId !== draftId) {
+            setDraftId(savedDraftId)
+          }
+          setIsDraft(true)
+          return { id: savedDraftId, createdNewDraft: false }
+        } catch (err) {
+          if (err?.response?.status !== 404) {
+            throw err
+          }
         }
       }
+
+      const res = await axios.post(`${API}/invoices/draft`, payload)
+      currentDraftId = res.data.id
+      createdNewDraft = true
+      draftIdRef.current = currentDraftId
+      setDraftId(currentDraftId)
+      setIsDraft(true)
+      return { id: currentDraftId, createdNewDraft }
     }
 
-    const res = await axios.post(`${API}/invoices/draft`, payload)
-    currentDraftId = res.data.id
-    createdNewDraft = true
-    setDraftId(currentDraftId)
-    setIsDraft(true)
-    return { id: currentDraftId, createdNewDraft }
+    draftSaveQueueRef.current = draftSaveQueueRef.current
+      .catch(() => undefined)
+      .then(runSave)
+
+    return draftSaveQueueRef.current
   }
 
   const clearDraftPersistence = () => {
+    draftIdRef.current = null
     setDraftId(null)
     setIsDraft(false)
     localStorage.removeItem(INVOICE_STORAGE_KEY)
@@ -586,13 +641,8 @@ export default function Invoice() {
         return
       }
 
-      if (appliedAdvance <= 0 && (!paidAmount || paidAmount <= 0)) {
-        toast.error("Enter paid amount for partial payment")
-        return
-      }
-
-      if (Number(paidAmount) >= payableTotal && payableTotal > 0) {
-        toast.error("Partial payment must be less than payable amount")
+      if (Number(paidAmount) > payableTotal && payableTotal > 0) {
+        toast.error("Partial payment cannot exceed payable amount")
         return
       }
 
@@ -624,7 +674,7 @@ export default function Invoice() {
         },
         {
           params: {
-            payment_mode: paymentMode
+            payment_mode: normalizedPaymentMode
           }
         }
       )
@@ -650,7 +700,7 @@ export default function Invoice() {
   }
   useEffect(() => {
     fetchProducts()
-    fetchCombos() // 🔥 ADD THIS
+    fetchCombos() // ðŸ”¥ ADD THIS
   }, [])
   useEffect(() => {
     const token = localStorage.getItem("token")
@@ -675,7 +725,7 @@ export default function Invoice() {
     })
   }, [])
 
-  // ❌ DISABLED AUTO-SAVE - DO NOT AUTO-SAVE EVERY 10 SECONDS
+  // âŒ DISABLED AUTO-SAVE - DO NOT AUTO-SAVE EVERY 10 SECONDS
   useEffect(() => {
     if (activeTab === "create" && scanMode === "barcode") {
       setTimeout(() => skuInputRef.current?.focus(), 300)
@@ -683,16 +733,14 @@ export default function Invoice() {
   }, [activeTab, scanMode])
 
   useEffect(() => {
-    const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent)
-    if (isMobile) {
-      setScanMode("camera")
-      setShowCamera(true)
-    } else {
-      setScanMode("barcode")
-      setShowCamera(false)
-      setTimeout(() => skuInputRef.current?.focus(), 300)
-    }
+    setScanMode("barcode")
+    setShowCamera(false)
+    setTimeout(() => skuInputRef.current?.focus(), 300)
   }, [])
+
+  useEffect(() => {
+    draftIdRef.current = draftId
+  }, [draftId])
   useEffect(() => {
     if (!showVariantDialog) return
 
@@ -727,8 +775,8 @@ export default function Invoice() {
       setUseAdvance(Boolean(savedState.useAdvance))
       setLineItems(Array.isArray(savedState.lineItems) ? savedState.lineItems : [])
       setDiscount(Number(savedState.discount || 0))
-      setPaymentStatus(savedState.paymentStatus || "")
-      setPaymentMode(savedState.paymentMode || "cash")
+      setPaymentStatus(normalizePaymentStatus(savedState.paymentStatus))
+      setPaymentMode(normalizePaymentMode(savedState.paymentMode))
       setGstEnabled(Boolean(savedState.gstEnabled))
       setGstRate(Number(savedState.gstRate || 18))
       setAdditionalCharges(
@@ -769,8 +817,8 @@ export default function Invoice() {
 
         lineItems,
         discount,
-        paymentStatus,
-        paymentMode,
+        paymentStatus: normalizedPaymentStatus,
+        paymentMode: normalizedPaymentMode,
 
         gstEnabled,
         gstRate,
@@ -801,8 +849,8 @@ export default function Invoice() {
     useAdvance,
     lineItems,
     discount,
-    paymentStatus,
-    paymentMode,
+    normalizedPaymentStatus,
+    normalizedPaymentMode,
     gstEnabled,
     gstRate,
     additionalCharges,
@@ -811,7 +859,7 @@ export default function Invoice() {
     paidAmount
   ])
 
-  // ❌ DISABLED - NO RECOVERY ALERT ON LOAD
+  // âŒ DISABLED - NO RECOVERY ALERT ON LOAD
 
   useEffect(() => {
     if (location.state?.customer) {
@@ -828,7 +876,7 @@ export default function Invoice() {
       setActiveTab("create")
       toast.success("Customer details loaded")
 
-      // 🧹 IMPORTANT: clear navigation state
+      // ðŸ§¹ IMPORTANT: clear navigation state
       window.history.replaceState({}, document.title)
     }
   }, [location.state])
@@ -844,7 +892,7 @@ export default function Invoice() {
       return
     }
 
-    if (!isAdvanceCovered && useAdvance && appliedAdvance > 0 && paymentStatus !== "paid") {
+    if (!isAdvanceCovered && useAdvance && appliedAdvance > 0 && normalizedPaymentStatus !== "paid") {
       setPaymentStatus("partial")
       return
     }
@@ -854,15 +902,15 @@ export default function Invoice() {
       return
     }
 
-    if (paymentStatus === "paid") {
+    if (normalizedPaymentStatus === "paid") {
       setPaidAmount(payableTotal)
     }
 
-    else if (paymentStatus === "pending") {
+    else if (normalizedPaymentStatus === "pending") {
       setPaidAmount(0)
     }
 
-    else if (paymentStatus === "partial") {
+    else if (normalizedPaymentStatus === "partial") {
       if (paidAmount > payableTotal) {
         setPaidAmount(payableTotal)
       }
@@ -871,7 +919,7 @@ export default function Invoice() {
       }
     }
 
-  }, [paymentStatus, payableTotal, isAdvanceCovered, useAdvance, appliedAdvance, pendingBalance, advanceAvailable])
+  }, [normalizedPaymentStatus, payableTotal, isAdvanceCovered, useAdvance, appliedAdvance, pendingBalance, advanceAvailable, paidAmount])
 
   useEffect(() => {
     if (!isDraft && !draftId) return
@@ -883,12 +931,20 @@ export default function Invoice() {
     return () => clearTimeout(timer)
 
   }, [
+    customerId,
+    customerPhone,
+    customerEmail,
+    customerAddress,
+    useAdvance,
     lineItems,
     additionalCharges,
     discount,
     gstEnabled,
     gstRate,
-    customerName
+    customerName,
+    normalizedPaymentStatus,
+    normalizedPaymentMode,
+    paidAmount
   ])
 
   useEffect(() => {
@@ -985,10 +1041,10 @@ export default function Invoice() {
 
       toast.success("Draft deleted")
 
-      // 🔄 Refresh draft list
+      // ðŸ”„ Refresh draft list
       fetchDrafts()
 
-      // 🧹 If currently opened draft was deleted → reset
+      // ðŸ§¹ If currently opened draft was deleted â†’ reset
       if (draftId === idToDelete) {
         resetForm()
       }
@@ -1062,7 +1118,7 @@ export default function Invoice() {
     // Open modal instead of prompt
     setViewInvoice(invoice)
     setPaymentAmount("")
-    setPaymentModeSelected("cash")
+    setPaymentModeSelected("upi")
     setPaymentReference("")
     setIsPaymentModalOpen(true)
 
@@ -1109,7 +1165,7 @@ export default function Invoice() {
       // Reset form
       setPaymentAmount("")
       setPaymentReference("")
-      setPaymentModeSelected("cash")
+      setPaymentModeSelected("upi")
 
       // Refresh data
       await fetchPaymentHistory(viewInvoice.id)
@@ -1132,15 +1188,15 @@ export default function Invoice() {
     toast.error("Recorded payments cannot be deleted because the audit trail is locked")
   }
 
-  // ✅ NEW: Handle Mark as Paid (opens payment mode dialog first)
+  // âœ… NEW: Handle Mark as Paid (opens payment mode dialog first)
   const handleMarkAsPaid = (invoiceId) => {
     setPendingPaidInvoiceId(invoiceId)
-    setPaidPaymentMode("cash")
+    setPaidPaymentMode("upi")
     setPaidPaymentRef("")
     setIsPaidModeDialogOpen(true)
   }
 
-  // ✅ NEW: Confirm Mark as Paid with payment mode
+  // âœ… NEW: Confirm Mark as Paid with payment mode
   const confirmMarkAsPaid = async () => {
     if (!pendingPaidInvoiceId) return
 
@@ -1238,7 +1294,7 @@ export default function Invoice() {
     try {
       const res = await axios.get(`${API}/invoices/drafts`)
 
-      // 🔥 SAFETY NORMALIZATION
+      // ðŸ”¥ SAFETY NORMALIZATION
       const list =
         Array.isArray(res.data)
           ? res.data
@@ -1250,7 +1306,7 @@ export default function Invoice() {
     } catch (err) {
       console.error("Draft fetch failed", err)
       toast.error("Failed to load drafts")
-      setDrafts([]) // ⛑️ fallback
+      setDrafts([]) // â›‘ï¸ fallback
     }
   }
 
@@ -1281,7 +1337,7 @@ export default function Invoice() {
   }
 const addProductToInvoice = (product, variant = null) => {
 
-  // ✅ FIXED PRICE
+  // âœ… FIXED PRICE
   let price = 0
 
 if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
@@ -1289,7 +1345,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 } else if (product?.selling_price && Number(product.selling_price) > 0) {
   price = Number(product.selling_price)
 } else {
-  console.warn("⚠️ PRODUCT PRICE ISSUE", { product, variant })
+  console.warn("âš ï¸ PRODUCT PRICE ISSUE", { product, variant })
   price = 0
 }
 
@@ -1456,7 +1512,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 
     let scannedSku = skuInputRaw.trim()
 
-    // ✅ Handle QR JSON payload
+    // âœ… Handle QR JSON payload
     try {
       const parsed = JSON.parse(scannedSku)
       scannedSku = parsed.v_sku || parsed.sku || scannedSku
@@ -1475,7 +1531,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
       const isVariant = !!product.variant
       const hasVariants = Array.isArray(product.variants) && product.variants.length > 0
 
-      // 🚨 CASE 1: PRODUCT QR / PRODUCT SKU WITH VARIANTS
+      // ðŸš¨ CASE 1: PRODUCT QR / PRODUCT SKU WITH VARIANTS
       if (!isVariant && hasVariants) {
         setSelectedProductForVariant(product)
         setShowVariantDialog(true)
@@ -1483,7 +1539,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
         return
       }
 
-      // 🟢 CASE 2: VARIANT QR / VARIANT SKU
+      // ðŸŸ¢ CASE 2: VARIANT QR / VARIANT SKU
       let displayName, itemPrice, itemImage, variantInfo
 
       if (isVariant) {
@@ -1506,7 +1562,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
           v_selling_price: variant.v_selling_price,
         }
       } else {
-        // 🟢 CASE 3: PRODUCT WITHOUT VARIANTS
+        // ðŸŸ¢ CASE 3: PRODUCT WITHOUT VARIANTS
         displayName = product.name
         itemPrice = product.selling_price
         itemImage = product.images?.[0] || "/placeholder.png"
@@ -1663,7 +1719,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
   // }
 
   const resetForm = () => {
-    // 🧾 Customer
+    // ðŸ§¾ Customer
     setCustomerPhone("")
     setCustomerName("")
     setCustomerEmail("")
@@ -1672,22 +1728,22 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
     setCustomerBalance(0)
     setUseAdvance(false)
 
-    // 🧺 Invoice
+    // ðŸ§º Invoice
     setLineItems([])
     setDiscount(0)
-    setPaymentStatus("")
-    setPaymentMode("cash")
+    setPaymentStatus("pending")
+    setPaymentMode("upi")
 
-    // 🧾 Draft state (IMPORTANT)
+    // ðŸ§¾ Draft state (IMPORTANT)
     setDraftId(null)
     setIsDraft(false)
     setAdditionalCharges([{ label: "", amount: "" }])
 
-    // ➕ Extras
+    // âž• Extras
     // setManualAmount(0)
     // setManualLabel("Additional Charge")
 
-    // 🔍 Search / Scan
+    // ðŸ” Search / Scan
     setSkuInput("")
     setProductSearch("")
     setSearchResults([])
@@ -1695,13 +1751,13 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
     setSelectedProduct(null)
     setShowVariantDialog(false)
 
-    // 🔎 Product search
+    // ðŸ”Ž Product search
     setProductSearchQuery("")
     setProductSearchResults([])
     setIsSearchingProducts(false)
     setSelectedProductForVariant(null)
 
-    // 🧾 GST
+    // ðŸ§¾ GST
     setGstEnabled(false)
     setGstRate(18)
     setPaidAmount(0)
@@ -1846,7 +1902,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                 </div>
                 <div class="info-block" style="text-align: right;">
                   <h3>INVOICE DETAILS</h3>
-                  <p><strong>Created By:</strong> ${invoice.created_by || "—"}</p>
+                  <p><strong>Created By:</strong> ${invoice.created_by || "â€”"}</p>
 
                   <p><strong>Invoice No:</strong> ${invoice.invoice_number}</p>
                   <p><strong>Date:</strong> ${new Date(invoice.created_at).toLocaleDateString()}</p>
@@ -1879,9 +1935,9 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                       <td>${index + 1}</td>
                       <td>${formatProductName(item)}</td>
                       <td class="text-right">${item.quantity}</td>
-                      <td class="text-right">₹${formatCurrency(item.price)}</td>
+                      <td class="text-right">${formatDisplayCurrency(item.price)}</td>
                       <td class="text-right">${item.gst_rate}%</td>
-                      <td class="text-right">₹${formatCurrency(item.total)}</td>
+                      <td class="text-right">${formatDisplayCurrency(item.total)}</td>
                     </tr>
                   `,
         )
@@ -1893,13 +1949,13 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                 <table>
                   <tr>
                     <td>Subtotal:</td>
-                    <td class="text-right">₹${formatCurrency(subtotal)}</td>
+                    <td class="text-right">${formatDisplayCurrency(subtotal)}</td>
                   </tr>
                   <tr>
     ${gstAmount > 0 ? `
     <tr>
       <td>GST Amount:</td>
-      <td class="text-right">₹${formatCurrency(gstAmount)}</td>
+      <td class="text-right">${formatDisplayCurrency(gstAmount)}</td>
     </tr>
     ` : ""}
                   </tr>
@@ -1909,7 +1965,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
           .map(c => `
         <tr>
           <td>${c.label || "Additional Charge"}:</td>
-          <td class="text-right">₹${formatCurrency(c.amount)}</td>
+          <td class="text-right">${formatDisplayCurrency(c.amount)}</td>
         </tr>
       `).join("")
         : ""
@@ -1917,11 +1973,11 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 
                   <tr>
                     <td>Discount:</td>
-                    <td class="text-right">-₹${formatCurrency(invoice.discount)}</td>
+                    <td class="text-right">-${formatDisplayCurrency(invoice.discount)}</td>
                   </tr>
                   <tr class="total-row">
                     <td>Total Amount:</td>
-                    <td class="text-right">₹${formatCurrency(total)}</td>
+                    <td class="text-right">${formatDisplayCurrency(total)}</td>
                   </tr>
                 </table>
               </div>
@@ -1996,8 +2052,8 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                   <td>${i + 1}</td>
                   <td>${item.product_name}</td>
                   <td>${item.quantity}</td>
-                  <td>₹${formatCurrency(item.price)}</td>
-                  <td>₹${formatCurrency(item.total)}</td>
+                  <td>${formatDisplayCurrency(item.price)}</td>
+                  <td>${formatDisplayCurrency(item.total)}</td>
                 </tr>
               `).join("")
         }
@@ -2005,10 +2061,10 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
         </table>
 
         <br/>
-        <p><strong>Subtotal:</strong> ₹${formatCurrency(subtotal)}</p>
-        <p><strong>GST:</strong> ₹${formatCurrency(gstAmount)}</p>
-        <p><strong>Discount:</strong> ₹${formatCurrency(invoice.discount)}</p>
-        <h3>Total: ₹${formatCurrency(total)}</h3>
+        <p><strong>Subtotal:</strong> ${formatDisplayCurrency(subtotal)}</p>
+        <p><strong>GST:</strong> ${formatDisplayCurrency(gstAmount)}</p>
+        <p><strong>Discount:</strong> ${formatDisplayCurrency(invoice.discount)}</p>
+        <h3>Total: ${formatDisplayCurrency(total)}</h3>
       </div>
     `
 
@@ -2154,7 +2210,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
   const mobileStatsCards = [
     {
       label: "Today Sales",
-      value: `₹${formatCurrency(todayStats.total_sales_today)}`,
+      value: `${formatDisplayCurrency(todayStats.total_sales_today)}`,
       icon: Wallet,
     },
     {
@@ -2164,12 +2220,12 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
     },
     {
       label: "Cash",
-      value: `₹${formatCurrency(todayStats.cash_sales_today)}`,
+      value: `${formatDisplayCurrency(todayStats.cash_sales_today)}`,
       icon: Landmark,
     },
     {
       label: "Online",
-      value: `₹${formatCurrency(todayStats.online_sales_today)}`,
+      value: `${formatDisplayCurrency(todayStats.online_sales_today)}`,
       icon: Share2,
     },
   ]
@@ -2190,7 +2246,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
       const downloadResult = await saveFileWithNotification({
         blob,
         fileName: `invoices-${exportRange}.pdf`,
-        notificationTitle: "Invoice Downloaded 📄",
+        notificationTitle: "Invoice Downloaded ðŸ“„",
         notificationBody: `invoices-${exportRange}.pdf saved to Files`,
       })
       setExportDialogOpen(false)
@@ -2216,18 +2272,18 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
       return
     }
 
-    // 🔒 Draft identity (MOST IMPORTANT)
+    // ðŸ”’ Draft identity (MOST IMPORTANT)
     setDraftId(draft.id)
     setIsDraft(true)
 
-    // 👤 Customer
+    // ðŸ‘¤ Customer
     setCustomerId(draft.customer_id ?? null)
     setCustomerName(draft.customer_name ?? "")
     setCustomerPhone(normalizePhoneNumber(draft.customer_phone ?? ""))
     setCustomerAddress(draft.customer_address ?? "")
     setCustomerEmail("") // not stored in invoice table
 
-    // 🧺 Items
+    // ðŸ§º Items
     const parsedItems = Array.isArray(draft.items) ? draft.items : []
 
     setLineItems(
@@ -2249,14 +2305,14 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
       }))
     )
 
-    // 💰 Amounts
-    // 💰 Amounts
+    // ðŸ’° Amounts
+    // ðŸ’° Amounts
     setDiscount(Number(draft.discount || 0))
-    setPaymentStatus(draft.payment_status || "pending")
-    setPaymentMode(draft.payment_mode || "cash")
+    setPaymentStatus(normalizePaymentStatus(draft.payment_status))
+    setPaymentMode(normalizePaymentMode(draft.payment_mode))
     setPaidAmount(Number(draft.paid_amount || 0))
 
-    // ✅ ADD THIS
+    // âœ… ADD THIS
     if (Array.isArray(draft.additional_charges) && draft.additional_charges.length > 0) {
       setAdditionalCharges(
         draft.additional_charges.map((c) => ({
@@ -2268,7 +2324,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
       setAdditionalCharges([{ label: "", amount: "" }])
     }
 
-    // 🧾 GST
+    // ðŸ§¾ GST
     setGstEnabled(Boolean(draft.gst_enabled))
     setGstRate(Number(draft.gst_rate || 18))
 
@@ -2297,13 +2353,13 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 
 const addSelectedProductToInvoice = (product, variant) => {
 
-  // 🔥 ===== COMBO FLOW =====
+  // ðŸ”¥ ===== COMBO FLOW =====
   if (pendingCombo) {
 
     const { combo, variantItems, selected, currentIndex } = pendingCombo
     const currentComboItem = variantItems[currentIndex]
 
-    // ✅ FIXED PRICE
+    // âœ… FIXED PRICE
    let comboPrice = 0
 
 if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
@@ -2315,7 +2371,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 } else if (currentComboItem?.price && Number(currentComboItem.price) > 0) {
   comboPrice = Number(currentComboItem.price)
 } else {
-  console.warn("⚠️ COMBO PRICE FALLBACK", { product, variant })
+  console.warn("âš ï¸ COMBO PRICE FALLBACK", { product, variant })
   comboPrice = 0
 }
 
@@ -2356,11 +2412,11 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
     setPendingCombo(null)
     setShowVariantDialog(false)
 
-    toast.success("Combo added with all variants 🚀")
+    toast.success("Combo added with all variants ðŸš€")
     return
   }
 
-  // 🔥 ===== NORMAL FLOW =====
+  // ðŸ”¥ ===== NORMAL FLOW =====
   let displayName, itemPrice, itemImage, itemSku, variantInfo
 
   if (variant) {
@@ -2370,7 +2426,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 
     displayName = `${product.name} (${variantLabel})`
 
-    // ✅ FIXED PRICE
+    // âœ… FIXED PRICE
     itemPrice =
       variant.v_selling_price !== null && Number(variant.v_selling_price) > 0
         ? Number(variant.v_selling_price)
@@ -2508,7 +2564,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 
                   {draftId && (
                     <div className="bg-yellow-50 border border-yellow-300 text-yellow-800 px-3 py-1 rounded-lg text-xs font-medium">
-                      Editing Draft • #{draftId}
+                      Editing Draft â€¢ #{draftId}
                     </div>
                   )}
 
@@ -2616,7 +2672,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                     <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 space-y-2">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-emerald-300">Available Advance: Rs. {formatCurrency(advanceAvailable)}</p>
+                          <p className="text-sm font-semibold text-emerald-300">Available Advance: {formatDisplayCurrency(advanceAvailable)}</p>
                           <p className="text-xs text-emerald-100/80">Customer wallet balance can be adjusted on this invoice.</p>
                         </div>
                         <label className="flex items-center gap-2 text-sm text-white">
@@ -2632,10 +2688,10 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                       </div>
                       {useAdvance && (
                         <div className="flex flex-wrap gap-4 text-xs text-emerald-100">
-                          <span>Advance Used: Rs. {formatCurrency(appliedAdvance)}</span>
-                          <span>Payable: Rs. {formatCurrency(payableTotal)}</span>
-                          {!isAdvanceCovered && paymentStatus === "partial" && remainingBalance > 0 && (
-                            <span>Balance Amount: Rs. {formatCurrency(remainingBalance)}</span>
+                          <span>Advance Used: {formatDisplayCurrency(appliedAdvance)}</span>
+                          <span>Payable: {formatDisplayCurrency(payableTotal)}</span>
+                          {!isAdvanceCovered && normalizedPaymentStatus === "partial" && remainingBalance > 0 && (
+                            <span>Balance Amount: {formatDisplayCurrency(remainingBalance)}</span>
                           )}
                         </div>
                       )}
@@ -2686,7 +2742,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
       </Button>
     </div>
 
-    {/* 🔥 SEARCH RESULTS - ONE LINE UI */}
+    {/* ðŸ”¥ SEARCH RESULTS - ONE LINE UI */}
     {productSearchResults.length > 0 && (
       <div className="absolute z-50 w-full mt-2 bg-card border rounded-xl shadow-2xl max-h-[300px] overflow-y-auto animate-in fade-in zoom-in-95 duration-200">
         <div className="p-2 space-y-1">
@@ -2718,24 +2774,24 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                   {product.name}
                 </span>
 
-                <span className="text-muted-foreground">•</span>
+                <span className="text-muted-foreground">â€¢</span>
 
                 {/* SKU */}
                 <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">
                   {product.sku}
                 </span>
 
-                <span className="text-muted-foreground">•</span>
+                <span className="text-muted-foreground">â€¢</span>
 
                 {/* PRICE */}
                 <span className="text-primary font-semibold">
-                  ₹{product.selling_price}
+                  â‚¹{product.selling_price}
                 </span>
 
                 {/* VARIANT */}
                 {product.variants?.length > 0 && (
                   <>
-                    <span className="text-muted-foreground">•</span>
+                    <span className="text-muted-foreground">â€¢</span>
                     <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded">
                       {product.variants.length}v
                     </span>
@@ -2868,7 +2924,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                                 </div>
                                 <div className="text-right">
                                   <p className="text-xs text-muted-foreground">Price</p>
-                                  <p className="font-bold text-primary">₹{formatCurrency(item.price)}</p>
+                                  <p className="font-bold text-primary">{formatDisplayCurrency(item.price)}</p>
                                 </div>
                               </div>
                             </div>
@@ -2915,7 +2971,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                       onClick={() => removeAdditionalCharge(index)}
                       disabled={additionalCharges.length === 1}
                     >
-                      ✕
+                      âœ•
                     </Button>
                   </div>
                 ))}
@@ -2929,7 +2985,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                 </Button>
 
                 <div className="flex justify-end text-sm font-semibold">
-                  Additional Total: ₹{additionalTotal.toFixed(2)}
+                  Additional Total: {formatDisplayCurrency(additionalTotal)}
                 </div>
               </CardContent>
             </Card>
@@ -3040,7 +3096,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                   {/* DISCOUNT */}
                   <div>
                     <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
-                      Discount (₹)
+                      Discount (â‚¹)
                     </Label>
 
                     <Input
@@ -3066,7 +3122,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                           Payment Status
                         </Label>
 
-                        <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+                        <Select value={normalizedPaymentStatus} onValueChange={(value) => setPaymentStatus(normalizePaymentStatus(value))}>
                           <SelectTrigger className="h-11 rounded-xl bg-[#0F172A] border border-[#2A3553] text-gray-200">
                             <SelectValue placeholder="Select status" />
                           </SelectTrigger>
@@ -3084,7 +3140,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                           Payment Mode
                         </Label>
 
-                        <Select value={paymentMode} onValueChange={setPaymentMode}>
+                        <Select value={normalizedPaymentMode} onValueChange={(value) => setPaymentMode(normalizePaymentMode(value))}>
                           <SelectTrigger className="h-11 rounded-xl bg-[#0F172A] border border-[#2A3553] text-gray-200">
                             <SelectValue placeholder="Select mode" />
                           </SelectTrigger>
@@ -3093,7 +3149,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                             <SelectItem value="cash" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">Cash</SelectItem>
                             <SelectItem value="bank" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">Bank</SelectItem>
                             <SelectItem value="upi" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">UPI</SelectItem>
-                            <SelectItem value="card" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">Card</SelectItem>
+                            <SelectItem value="cheque" className="hover:bg-[#1A233A] focus:bg-[#1A233A]">Cheque</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -3102,7 +3158,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
 
 
                   {/* PAID AMOUNT FOR PARTIAL */}
-                  {!isAdvanceCovered && paymentStatus === "partial" && (
+                  {!isAdvanceCovered && normalizedPaymentStatus === "partial" && (
                     <div>
                       <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
                         Paid Amount
@@ -3162,7 +3218,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                   <div className="flex justify-between text-muted-foreground">
                     <span>Subtotal:</span>
                     <span className="font-medium text-foreground">
-                      ₹{formatCurrency(subtotal)}
+                      {formatDisplayCurrency(subtotal)}
                     </span>
                   </div>
 
@@ -3173,7 +3229,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                       <div key={i} className="flex justify-between text-muted-foreground">
                         <span>{c.label || "Additional Charge"}:</span>
                         <span className="font-medium text-foreground">
-                          ₹{formatCurrency(c.amount)}
+                          {formatDisplayCurrency(c.amount)}
                         </span>
                       </div>
                     ))}
@@ -3182,7 +3238,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                   <div className="flex justify-between text-muted-foreground">
                     <span>GST Amount:</span>
                     <span className="font-medium text-foreground">
-                      ₹{formatCurrency(gstAmount)}
+                      {formatDisplayCurrency(gstAmount)}
                     </span>
                   </div>
 
@@ -3190,33 +3246,33 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                   <div className="flex justify-between text-muted-foreground">
                     <span>Discount:</span>
                     <span className="font-medium text-foreground">
-                      -₹{formatCurrency(discount)}
+                      -{formatDisplayCurrency(discount)}
                     </span>
                   </div>
 
 
                   <div className="flex justify-between font-bold text-base border-t pt-3 mt-2">
                     <span>Total:</span>
-                    <span>₹{formatCurrency(total)}</span>
+                    <span>{formatDisplayCurrency(total)}</span>
                   </div>
 
                   {appliedAdvance > 0 && (
                     <div className="flex justify-between text-emerald-400 font-medium">
                       <span>Advance Used:</span>
-                      <span>-₹{formatCurrency(appliedAdvance)}</span>
+                      <span>-{formatDisplayCurrency(appliedAdvance)}</span>
                     </div>
                   )}
 
                   <div className="flex justify-between font-semibold text-base">
                     <span>Payable:</span>
-                    <span>₹{formatCurrency(payableTotal)}</span>
+                    <span>{formatDisplayCurrency(payableTotal)}</span>
                   </div>
 
                   {/* SHOW BALANCE */}
-                  {paymentStatus === "partial" && (
+                  {normalizedPaymentStatus === "partial" && (
                     <div className="flex justify-between text-red-500 font-semibold">
                       <span>Balance Amount:</span>
-                      <span>₹{formatCurrency(remainingBalance)}</span>
+                      <span>{formatDisplayCurrency(remainingBalance)}</span>
                     </div>
                   )}
 
@@ -3281,7 +3337,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                     key={d.id}
                     className="flex justify-between items-center border p-3 rounded-lg hover:bg-muted"
                   >
-                    {/* 🟢 LEFT SIDE → OPEN DRAFT */}
+                    {/* ðŸŸ¢ LEFT SIDE â†’ OPEN DRAFT */}
                     <div
                       className="cursor-pointer"
                       onClick={async () => {
@@ -3297,11 +3353,11 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                     >
                       <p className="font-mono text-sm">{d.draft_number}</p>
                       <p className="text-xs text-muted-foreground">
-                        {d.customer_name} • ₹{formatCurrency(d.total || 0)}
+                        {d.customer_name} â€¢ {formatDisplayCurrency(d.total || 0)}
                       </p>
                     </div>
 
-                    {/* 🔴 RIGHT SIDE → ACTIONS */}
+                    {/* ðŸ”´ RIGHT SIDE â†’ ACTIONS */}
                     <div className="flex gap-2">
                       <Button
                         size="sm"
@@ -3365,7 +3421,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
               <CardContent className="p-4">
                 <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Payment Split</p>
                 <p className="mt-1 text-sm font-semibold">
-                  Cash ₹{formatCurrency(todayStats.cash_sales_today)} vs Online ₹{formatCurrency(todayStats.online_sales_today)}
+                  Cash {formatDisplayCurrency(todayStats.cash_sales_today)} vs Online {formatDisplayCurrency(todayStats.online_sales_today)}
                 </p>
               </CardContent>
             </Card>
@@ -3414,19 +3470,19 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                 </SelectItem>
 
                 <SelectItem value="paid">
-                  ✓ Paid
+                  âœ“ Paid
                 </SelectItem>
 
                 <SelectItem value="pending">
-                  ⏳ Pending
+                  â³ Pending
                 </SelectItem>
 
                 <SelectItem value="partial">
-                  ⚠ Partial
+                  âš  Partial
                 </SelectItem>
 
                 <SelectItem value="cancelled">
-                  ✕ Cancelled
+                  âœ• Cancelled
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -3512,25 +3568,25 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                     {/* Amount */}
                     <div className="bg-muted/50 p-2 rounded">
                       <p className="text-xs text-muted-foreground">Total</p>
-                      <p className="text-sm font-bold">₹{formatCurrency(getInvoiceDisplayTotal(inv))}</p>
+                      <p className="text-sm font-bold">{formatDisplayCurrency(getInvoiceDisplayTotal(inv))}</p>
 
                       {/* Paid Amount */}
                       {Number(inv.advance_used || 0) > 0 && (
                         <p className="text-xs text-emerald-600 font-medium mt-1">
-                          Advance Used: ₹{formatCurrency(inv.advance_used)}
+                          Advance Used: {formatDisplayCurrency(inv.advance_used)}
                         </p>
                       )}
 
                       {inv.paid_amount > 0 && inv.payment_status !== "pending" && (
                         <p className="text-xs text-green-600 font-medium mt-1">
-                          ✓ Paid: ₹{formatCurrency(inv.paid_amount)}
+                          âœ“ Paid: {formatDisplayCurrency(inv.paid_amount)}
                         </p>
                       )}
 
                       {/* Balance */}
                       {inv.payment_status === "partial" && inv.balance_amount > 0 && (
                         <p className="text-xs text-red-600 font-medium mt-1">
-                          ⚠ Balance: ₹{formatCurrency(inv.balance_amount)}
+                          âš  Balance: {formatDisplayCurrency(inv.balance_amount)}
                         </p>
                       )}
                     </div>
@@ -3594,31 +3650,31 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                           <td className="p-3 font-mono text-sm">{inv.invoice_number}</td>
                           <td className="p-3 text-sm">{new Date(inv.created_at).toLocaleDateString()}</td>
                           <td className="p-3 text-sm">
-                            {inv.created_by || "—"}
+                            {inv.created_by || "â€”"}
                           </td>
 
                           <td className="p-3 font-medium">{inv.customer_name}</td>
                           <td className="p-3 text-sm">{inv.customer_phone || "N/A"}</td>
                           <td className="p-3 text-right font-semibold">
-                            ₹{formatCurrency(getInvoiceDisplayTotal(inv))}
+                            {formatDisplayCurrency(getInvoiceDisplayTotal(inv))}
 
                             {Number(inv.advance_used || 0) > 0 && (
                               <div className="text-xs text-emerald-600 font-medium">
-                                Advance Used: ₹{formatCurrency(inv.advance_used)}
+                                Advance Used: {formatDisplayCurrency(inv.advance_used)}
                               </div>
                             )}
 
                             {/* SHOW PAID AMOUNT ONLY IF NOT FULLY PAID AND NOT PENDING */}
                             {inv.paid_amount > 0 && inv.payment_status !== "pending" && (
                               <div className="text-xs text-green-600 font-medium">
-                                Paid: ₹{formatCurrency(inv.paid_amount)}
+                                Paid: {formatDisplayCurrency(inv.paid_amount)}
                               </div>
                             )}
 
                             {/* SHOW BALANCE ONLY IF PARTIAL STATUS */}
                             {inv.payment_status === "partial" && inv.balance_amount > 0 && (
                               <div className="text-xs text-red-500 font-medium">
-                                Balance: ₹{formatCurrency(inv.balance_amount)}
+                                Balance: {formatDisplayCurrency(inv.balance_amount)}
                               </div>
                             )}
 
@@ -3708,7 +3764,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                           </div>
                           <div className="text-right shrink-0">
                             <p className="text-lg font-bold">
-                              ₹{formatCurrency(getInvoiceTotal(inv))}
+                              {formatDisplayCurrency(getInvoiceTotal(inv))}
                             </p>
                           </div>
                         </div>
@@ -3864,7 +3920,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                     Created By
                   </p>
                   <p className="font-medium mt-1 text-base">
-                    {viewInvoice.created_by || "—"}
+                    {viewInvoice.created_by || "â€”"}
                   </p>
                 </div>
 
@@ -3881,7 +3937,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                       Payment Mode
                     </p>
                     <p className="font-medium mt-1 capitalize text-base">
-                      {viewInvoice.payment_mode || "—"}
+                      {viewInvoice.payment_mode || "â€”"}
                     </p>
                   </div>
                 </div>
@@ -3921,8 +3977,8 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                             )}
                           </td>
                           <td className="text-right p-2 align-top">{item.quantity}</td>
-                          <td className="text-right p-2 align-top">₹{formatCurrency(item.price)}</td>
-                          <td className="text-right p-2 align-top font-semibold">₹{formatCurrency(item.total)}</td>
+                          <td className="text-right p-2 align-top">{formatDisplayCurrency(item.price)}</td>
+                          <td className="text-right p-2 align-top font-semibold">{formatDisplayCurrency(item.total)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -3932,7 +3988,7 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                 <div className="mt-4 space-y-2 text-sm">
                   <div className="flex justify-between text-muted-foreground">
                     <span>Subtotal:</span>
-                    <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.subtotal)}</span>
+                    <span className="font-medium text-foreground">{formatDisplayCurrency(viewInvoice.subtotal)}</span>
                   </div>
                   {Array.isArray(viewInvoice.additional_charges) &&
                     viewInvoice.additional_charges
@@ -3941,35 +3997,35 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                         <div key={i} className="flex justify-between text-muted-foreground">
                           <span>{c.label || "Additional Charge"}:</span>
                           <span className="font-medium text-foreground">
-                            ₹{formatCurrency(c.amount)}
+                            {formatDisplayCurrency(c.amount)}
                           </span>
                         </div>
                       ))}
 
                   <div className="flex justify-between text-muted-foreground">
                     <span>GST:</span>
-                    <span className="font-medium text-foreground">₹{formatCurrency(viewInvoice.gst_amount)}</span>
+                    <span className="font-medium text-foreground">{formatDisplayCurrency(viewInvoice.gst_amount)}</span>
                   </div>
                   <div className="flex justify-between text-muted-foreground">
                     <span>Discount:</span>
-                    <span className="font-medium text-foreground">-₹{formatCurrency(viewInvoice.discount)}</span>
+                    <span className="font-medium text-foreground">-{formatDisplayCurrency(viewInvoice.discount)}</span>
                   </div>
                   <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                     <span>Total:</span>
-                    <span>₹{formatCurrency(getInvoiceDisplayTotal(viewInvoice))}</span>
+                    <span>{formatDisplayCurrency(getInvoiceDisplayTotal(viewInvoice))}</span>
 
                   </div>
                     {Number(viewInvoice.advance_used || 0) > 0 && (
                     <div className="flex justify-between text-emerald-600 font-medium">
                       <span>Advance Used:</span>
-                      <span>₹{formatCurrency(viewInvoice.advance_used || 0)}</span>
+                      <span>{formatDisplayCurrency(viewInvoice.advance_used || 0)}</span>
                     </div>
                   )}
                   {/* PAID AMOUNT - SHOW ONLY FOR PAID/PARTIAL STATUS */}
                   {viewInvoice.payment_status === "paid" && (
                     <div className="flex justify-between text-green-600 font-medium">
                       <span>Status:</span>
-                      <span className="font-bold">✓ FULLY PAID</span>
+                      <span className="font-bold">âœ“ FULLY PAID</span>
                     </div>
                   )}
 
@@ -3978,11 +4034,11 @@ if (variant?.v_selling_price && Number(variant.v_selling_price) > 0) {
                     <>
                       <div className="flex justify-between text-green-600 font-medium">
                         <span>Paid Amount:</span>
-                        <span>₹{formatCurrency(viewInvoice.paid_amount || 0)}</span>
+                        <span>{formatDisplayCurrency(viewInvoice.paid_amount || 0)}</span>
                       </div>
                       <div className="flex justify-between text-red-500 font-semibold">
                         <span>Balance Remaining:</span>
-                        <span>₹{formatCurrency(viewInvoice.balance_amount || 0)}</span>
+                        <span>{formatDisplayCurrency(viewInvoice.balance_amount || 0)}</span>
                       </div>
                     </>
                   )}
@@ -4057,7 +4113,7 @@ ${selectedVariantIndex === index
                     </div>
                     <div className="flex items-center gap-3 mt-2">
                       <span className="text-primary font-bold text-sm">
-                        ₹{variant.v_selling_price || selectedProductForVariant.selling_price}
+                        â‚¹{variant.v_selling_price || selectedProductForVariant.selling_price}
                       </span>
                       {variant.stock && (
                         <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
@@ -4099,7 +4155,7 @@ ${selectedVariantIndex === index
             </div>
 
             <div>
-              <Label>Price (₹)</Label>
+              <Label>Price (â‚¹)</Label>
               <Input
                 type="number"
                 placeholder="Enter price"
@@ -4138,7 +4194,7 @@ ${selectedVariantIndex === index
         </DialogContent>
       </Dialog>
 
-      {/* ✅ NEW: PAYMENT MODE DIALOG (for marking as paid) */}
+      {/* âœ… NEW: PAYMENT MODE DIALOG (for marking as paid) */}
       <Dialog open={isPaidModeDialogOpen} onOpenChange={setIsPaidModeDialogOpen}>
         <DialogContent className="w-full sm:max-w-md rounded-2xl p-4 sm:p-6">
           <DialogHeader>
@@ -4159,10 +4215,10 @@ ${selectedVariantIndex === index
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">💵 Cash</SelectItem>
-                  <SelectItem value="upi">📱 UPI</SelectItem>
-                  <SelectItem value="bank">🏦 Bank Transfer</SelectItem>
-                  <SelectItem value="cheque">📋 Cheque</SelectItem>
+                  <SelectItem value="cash">ðŸ’µ Cash</SelectItem>
+                  <SelectItem value="upi">ðŸ“± UPI</SelectItem>
+                  <SelectItem value="bank">ðŸ¦ Bank Transfer</SelectItem>
+                  <SelectItem value="cheque">ðŸ“‹ Cheque</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -4223,7 +4279,7 @@ ${selectedVariantIndex === index
         </DialogContent>
       </Dialog>
 
-      {/* ✅ NEW: PAYMENT MODAL - MOBILE OPTIMIZED */}
+      {/* âœ… NEW: PAYMENT MODAL - MOBILE OPTIMIZED */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="w-full sm:max-w-xl md:max-w-2xl rounded-2xl max-h-[95vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader className="mb-4">
@@ -4231,19 +4287,19 @@ ${selectedVariantIndex === index
               Add Payment - {viewInvoice?.invoice_number}
             </DialogTitle>
             <p className="text-xs sm:text-sm text-muted-foreground mt-3 space-y-1">
-              <div>Total: ₹{formatCurrency(viewInvoice?.total || 0)}</div>
-              <div>Paid: ₹{formatCurrency(viewInvoice?.paid_amount || 0)}</div>
-              <div className="font-semibold">Balance: ₹{formatCurrency(viewInvoice?.balance_amount || 0)}</div>
+              <div>Total: {formatDisplayCurrency(viewInvoice?.total || 0)}</div>
+              <div>Paid: {formatDisplayCurrency(viewInvoice?.paid_amount || 0)}</div>
+              <div className="font-semibold">Balance: {formatDisplayCurrency(viewInvoice?.balance_amount || 0)}</div>
             </p>
           </DialogHeader>
 
           <div className="space-y-4 sm:space-y-5 py-4">
             {/* PAYMENT AMOUNT - MOBILE OPTIMIZED */}
             <div>
-              <Label className="text-sm sm:text-base font-semibold mb-2 block">Payment Amount (₹)</Label>
+              <Label className="text-sm sm:text-base font-semibold mb-2 block">Payment Amount ({RUPEE_SYMBOL})</Label>
               <Input
                 type="number"
-                placeholder={`Max: ₹${formatCurrency(viewInvoice?.balance_amount || 0)}`}
+                placeholder={`Max: ${formatDisplayCurrency(viewInvoice?.balance_amount || 0)}`}
                 value={paymentAmount}
                 onChange={(e) => setPaymentAmount(e.target.value)}
                 className="w-full text-base sm:text-lg font-bold h-14 sm:h-12"
@@ -4258,10 +4314,10 @@ ${selectedVariantIndex === index
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">💵 Cash</SelectItem>
-                  <SelectItem value="upi">📱 UPI</SelectItem>
-                  <SelectItem value="bank">🏦 Bank Transfer</SelectItem>
-                  <SelectItem value="cheque">📋 Cheque</SelectItem>
+                  <SelectItem value="cash">ðŸ’µ Cash</SelectItem>
+                  <SelectItem value="upi">ðŸ“± UPI</SelectItem>
+                  <SelectItem value="bank">ðŸ¦ Bank Transfer</SelectItem>
+                  <SelectItem value="cheque">ðŸ“‹ Cheque</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -4312,7 +4368,7 @@ ${selectedVariantIndex === index
                     <div key={payment.id} className="p-2 sm:p-3 rounded-lg sm:rounded-xl bg-muted/50 border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="text-xs sm:text-sm font-semibold truncate">
-                          ₹{formatCurrency(payment.amount)} via {payment.payment_mode.toUpperCase()}
+                          {formatDisplayCurrency(payment.amount)} via {payment.payment_mode.toUpperCase()}
                         </p>
                         <p className="text-[10px] sm:text-xs text-muted-foreground">
                           {new Date(payment.created_at).toLocaleDateString('en-IN', {
@@ -4371,7 +4427,7 @@ ${selectedVariantIndex === index
               >
                 <p className="font-medium">{c.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  ₹{c.price} • {c.items.length} items
+                  â‚¹{c.price} â€¢ {c.items.length} items
                 </p>
               </div>
             ))}
@@ -4491,4 +4547,5 @@ ${selectedVariantIndex === index
     </div>
   )
 }
+
 

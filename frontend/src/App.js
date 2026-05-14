@@ -6,6 +6,7 @@ import Login from "@/pages/Login"
 import Dashboard from "@/pages/Dashboard"
 import Products from "@/pages/Products"
 import Customers from "@/pages/Customers"
+import Employees from "@/pages/Employees"
 import Invoices from "@/pages/Invoices"
 import Categories from "@/pages/Categories"
 import Inventory from "@/pages/Inventory"
@@ -89,6 +90,7 @@ const AppShell = () => {
             <Route index element={<Dashboard />} />
             <Route path="products" element={<Products />} />
             <Route path="customers" element={<Customers />} />
+            <Route path="employees" element={<Employees />} />
             <Route path="requirements" element={<Requirements />} />
             <Route path="categories" element={<Categories />} />
             <Route path="inventory" element={<Inventory />} />

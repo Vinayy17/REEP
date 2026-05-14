@@ -23,10 +23,15 @@ import { buildInvoicePrintHtml } from "@/lib/invoicePrintTemplate"
 
 const API = `${process.env.REACT_APP_BACKEND_URL || "http://localhost:8000"}/api`
 
+const RUPEE_SYMBOL = "\u20B9"
+
 const formatCurrency = (amount, decimals = 2) => {
     const num = typeof amount === "number" ? amount : Number(amount)
     return isNaN(num) ? "0.00" : num.toFixed(decimals)
 }
+
+const formatDisplayCurrency = (amount, decimals = 2) =>
+    `${RUPEE_SYMBOL}\u00A0${formatCurrency(amount, decimals)}`
 
 const generateManualSku = () =>
     `MANUAL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
@@ -66,15 +71,44 @@ const getAdvanceAmount = (balance) => Math.max(-normalizeCustomerBalance(balance
 const getCustomerBalanceText = (balance) => {
     const pending = getPendingAmount(balance)
     if (pending > 0) {
-        return `Pending balance: Rs. ${formatCurrency(pending)}`
+    return `Pending balance: ${formatDisplayCurrency(pending)}`
     }
 
     const advance = getAdvanceAmount(balance)
     if (advance > 0) {
-        return `Advance available: Rs. ${formatCurrency(advance)}`
+    return `Advance available: ${formatDisplayCurrency(advance)}`
     }
 
     return "No pending or advance balance"
+}
+
+const PAYMENT_STATUS_VALUES = new Set(["pending", "paid", "partial", "cancelled"])
+const PAYMENT_MODE_VALUES = new Set(["cash", "upi", "bank", "cheque"])
+
+const normalizePaymentStatus = (value, fallback = "pending") => {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z]/g, "")
+
+    return PAYMENT_STATUS_VALUES.has(normalized) ? normalized : fallback
+}
+
+const normalizePaymentMode = (value, fallback = "upi") => {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z]/g, "")
+
+    if (PAYMENT_MODE_VALUES.has(normalized)) {
+        return normalized
+    }
+
+    if (normalized === "card") {
+        return "bank"
+    }
+
+    return fallback
 }
 
 const invoiceMatchesSearch = (invoice, rawSearch) => {
@@ -161,12 +195,12 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     const [limit, setLimit] = useState(10)
     const [pagination, setPagination] = useState({ page: 1, total_pages: 1 })
     const [discount, setDiscount] = useState("")
-    const [paymentStatus, setPaymentStatus] = useState("")
+    const [paymentStatus, setPaymentStatus] = useState("pending")
     const [paidAmount, setPaidAmount] = useState(0)
     const [combos, setCombos] = useState([])
     const [comboModal, setComboModal] = useState(false)
     const [drafts, setDrafts] = useState([])
-    const [paymentMode, setPaymentMode] = useState("cash")
+    const [paymentMode, setPaymentMode] = useState("upi")
     const [productSearch, setProductSearch] = useState("")
     const [searchResults, setSearchResults] = useState([])
     const [showProductSearch, setShowProductSearch] = useState(false)
@@ -179,6 +213,8 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     const INVOICE_STORAGE_KEY = "invoice_draft_state"
     const draftToastLock = useRef(false)
     const hasRestoredDraftRef = useRef(false)
+    const draftSaveQueueRef = useRef(Promise.resolve())
+    const draftIdRef = useRef(null)
     const [showManualDialog, setShowManualDialog] = useState(false)
     const [manualItem, setManualItem] = useState({ name: "", price: "", quantity: 1 })
 
@@ -217,12 +253,12 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false)
     const [paymentHistory, setPaymentHistory] = useState([])
     const [paymentAmount, setPaymentAmount] = useState("")
-    const [paymentModeSelected, setPaymentModeSelected] = useState("cash")
+    const [paymentModeSelected, setPaymentModeSelected] = useState("upi")
     const [paymentReference, setPaymentReference] = useState("")
     const [loadingPayments, setLoadingPayments] = useState(false)
     const [sharingInvoiceId, setSharingInvoiceId] = useState(null)
     const [isPaidModeDialogOpen, setIsPaidModeDialogOpen] = useState(false)
-    const [paidPaymentMode, setPaidPaymentMode] = useState("cash")
+    const [paidPaymentMode, setPaidPaymentMode] = useState("upi")
     const [paidPaymentRef, setPaidPaymentRef] = useState("")
     const [pendingPaidInvoiceId, setPendingPaidInvoiceId] = useState(null)
 
@@ -239,14 +275,16 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     const appliedAdvance = useAdvance ? Math.min(advanceAvailable, Math.max(total, 0)) : 0
     const payableTotal = Math.max(total - appliedAdvance, 0)
     const isAdvanceCovered = appliedAdvance > 0 && payableTotal <= 0
+    const normalizedPaymentStatus = normalizePaymentStatus(paymentStatus)
+    const normalizedPaymentMode = normalizePaymentMode(paymentMode)
     const effectivePaymentStatus = isAdvanceCovered
         ? "paid"
         : (
-            paymentStatus === "paid"
+            normalizedPaymentStatus === "paid"
                 ? "paid"
-                : (paymentStatus === "partial" || appliedAdvance > 0
+                : (normalizedPaymentStatus === "partial" || appliedAdvance > 0
                     ? "partial"
-                    : (paymentStatus || "pending"))
+                    : normalizedPaymentStatus)
         )
     const remainingBalance = Math.max(
         effectivePaymentStatus === "partial"
@@ -301,6 +339,7 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             customer_id: customerId,
             customer_name: customerName,
             customer_phone: customerPhone,
+            customer_email: customerEmail,
             customer_address: customerAddress,
             items: cleanedItems,
             gst_enabled: gstEnabled,
@@ -308,36 +347,52 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             discount: Number(discount || 0),
             additional_charges: cleanedAdditionalCharges,
             payment_status: effectivePaymentStatus,
-            payment_mode: paymentMode || "cash",
+            payment_mode: normalizedPaymentMode,
             paid_amount: !isAdvanceCovered && effectivePaymentStatus !== "pending" ? Number(paidAmount || 0) : 0,
             use_advance: Boolean(useAdvance && appliedAdvance > 0)
         }
     }
 
     const persistDraft = async (payload) => {
-        let currentDraftId = draftId
-        let createdNewDraft = false
+        const runSave = async () => {
+            let currentDraftId = draftIdRef.current || draftId
+            let createdNewDraft = false
 
-        if (currentDraftId) {
-            try {
-                await axios.put(`${API}/invoices/draft/${currentDraftId}`, payload)
-                return { id: currentDraftId, createdNewDraft: false }
-            } catch (err) {
-                if (err?.response?.status !== 404) {
-                    throw err
+            if (currentDraftId) {
+                try {
+                    const res = await axios.put(`${API}/invoices/draft/${currentDraftId}`, payload)
+                    const savedDraftId = res?.data?.id || currentDraftId
+                    draftIdRef.current = savedDraftId
+                    if (savedDraftId !== draftId) {
+                        setDraftId(savedDraftId)
+                    }
+                    setIsDraft(true)
+                    return { id: savedDraftId, createdNewDraft: false }
+                } catch (err) {
+                    if (err?.response?.status !== 404) {
+                        throw err
+                    }
                 }
             }
+
+            const res = await axios.post(`${API}/invoices/draft`, payload)
+            currentDraftId = res.data.id
+            createdNewDraft = true
+            draftIdRef.current = currentDraftId
+            setDraftId(currentDraftId)
+            setIsDraft(true)
+            return { id: currentDraftId, createdNewDraft }
         }
 
-        const res = await axios.post(`${API}/invoices/draft`, payload)
-        currentDraftId = res.data.id
-        createdNewDraft = true
-        setDraftId(currentDraftId)
-        setIsDraft(true)
-        return { id: currentDraftId, createdNewDraft }
+        draftSaveQueueRef.current = draftSaveQueueRef.current
+            .catch(() => undefined)
+            .then(runSave)
+
+        return draftSaveQueueRef.current
     }
 
     const clearDraftPersistence = () => {
+        draftIdRef.current = null
         setDraftId(null)
         setIsDraft(false)
         localStorage.removeItem(INVOICE_STORAGE_KEY)
@@ -425,13 +480,8 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
                 return
             }
 
-            if (appliedAdvance <= 0 && (!paidAmount || paidAmount <= 0)) {
-                toast.error("Enter paid amount for partial payment")
-                return
-            }
-
-            if (Number(paidAmount) >= payableTotal && payableTotal > 0) {
-                toast.error("Partial payment must be less than payable amount")
+            if (Number(paidAmount) > payableTotal && payableTotal > 0) {
+                toast.error("Partial payment cannot exceed payable amount")
                 return
             }
 
@@ -462,7 +512,7 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
                 },
                 {
                     params: {
-                        payment_mode: paymentMode
+                        payment_mode: normalizedPaymentMode
                     }
                 }
             )
@@ -539,15 +589,9 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     }, [activeTab, scanMode])
 
     useEffect(() => {
-        const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent)
-        if (isMobile) {
-            setScanMode("camera")
-            setShowCamera(true)
-        } else {
-            setScanMode("barcode")
-            setShowCamera(false)
-            setTimeout(() => skuInputRef.current?.focus(), 300)
-        }
+        setScanMode("barcode")
+        setShowCamera(false)
+        setTimeout(() => skuInputRef.current?.focus(), 300)
     }, [])
 
     useEffect(() => {
@@ -580,8 +624,8 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             setUseAdvance(Boolean(savedState.useAdvance))
             setLineItems(Array.isArray(savedState.lineItems) ? savedState.lineItems : [])
             setDiscount(Number(savedState.discount || 0))
-            setPaymentStatus(savedState.paymentStatus || "")
-            setPaymentMode(savedState.paymentMode || "cash")
+            setPaymentStatus(normalizePaymentStatus(savedState.paymentStatus))
+            setPaymentMode(normalizePaymentMode(savedState.paymentMode))
             setGstEnabled(Boolean(savedState.gstEnabled))
             setGstRate(Number(savedState.gstRate || 18))
             setAdditionalCharges(
@@ -613,13 +657,18 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             const invoiceState = {
                 customerPhone, customerName, customerEmail, customerAddress, customerId,
                 customerBalance, useAdvance,
-                lineItems, discount, paymentStatus, paymentMode, gstEnabled, gstRate,
+                lineItems,
+                discount,
+                paymentStatus: normalizedPaymentStatus,
+                paymentMode: normalizedPaymentMode,
+                gstEnabled,
+                gstRate,
                 additionalCharges, draftId, isDraft, paidAmount
             }
             localStorage.setItem(INVOICE_STORAGE_KEY, JSON.stringify(invoiceState))
         }, 800)
         return () => clearTimeout(timeout)
-    }, [customerPhone, customerName, customerEmail, customerAddress, customerId, customerBalance, useAdvance, lineItems, discount, paymentStatus, paymentMode, gstEnabled, gstRate, additionalCharges, draftId, isDraft, paidAmount])
+    }, [customerPhone, customerName, customerEmail, customerAddress, customerId, customerBalance, useAdvance, lineItems, discount, normalizedPaymentStatus, normalizedPaymentMode, gstEnabled, gstRate, additionalCharges, draftId, isDraft, paidAmount])
 
     useEffect(() => {
         if (location.state?.customer) {
@@ -638,6 +687,10 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     }, [location.state])
 
     useEffect(() => {
+        draftIdRef.current = draftId
+    }, [draftId])
+
+    useEffect(() => {
         if (pendingBalance > 0 && useAdvance) {
             setUseAdvance(false)
             return
@@ -648,25 +701,25 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             return
         }
 
-        if (!isAdvanceCovered && useAdvance && appliedAdvance > 0 && paymentStatus !== "paid") {
+        if (!isAdvanceCovered && useAdvance && appliedAdvance > 0 && normalizedPaymentStatus !== "paid") {
             setPaymentStatus("partial")
             return
         }
 
         if (isAdvanceCovered) {
             setPaidAmount(0)
-        } else if (paymentStatus === "paid") {
+        } else if (normalizedPaymentStatus === "paid") {
             setPaidAmount(payableTotal)
-        } else if (paymentStatus === "pending") {
+        } else if (normalizedPaymentStatus === "pending") {
             setPaidAmount(0)
-        } else if (paymentStatus === "partial") {
+        } else if (normalizedPaymentStatus === "partial") {
             if (paidAmount > payableTotal) {
                 setPaidAmount(payableTotal)
             } else if (paidAmount < 0) {
                 setPaidAmount(0)
             }
         }
-    }, [paymentStatus, payableTotal, isAdvanceCovered, useAdvance, appliedAdvance, pendingBalance, advanceAvailable])
+    }, [normalizedPaymentStatus, payableTotal, isAdvanceCovered, useAdvance, appliedAdvance, pendingBalance, advanceAvailable, paidAmount])
 
     useEffect(() => {
         if (!isDraft && !draftId) return
@@ -674,7 +727,22 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             autoSaveDraft()
         }, 1200)
         return () => clearTimeout(timer)
-    }, [lineItems, additionalCharges, discount, gstEnabled, gstRate, customerName])
+    }, [
+        customerId,
+        customerPhone,
+        customerEmail,
+        customerAddress,
+        useAdvance,
+        lineItems,
+        additionalCharges,
+        discount,
+        gstEnabled,
+        gstRate,
+        customerName,
+        normalizedPaymentStatus,
+        normalizedPaymentMode,
+        paidAmount,
+    ])
 
     useEffect(() => {
         if (showVariantDialog) {
@@ -870,7 +938,7 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
     const addPayment = async (invoice) => {
         setViewInvoice(invoice)
         setPaymentAmount("")
-        setPaymentModeSelected("cash")
+        setPaymentModeSelected("upi")
         setPaymentReference("")
         setIsPaymentModalOpen(true)
         await fetchPaymentHistory(invoice.id)
@@ -912,7 +980,7 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
             toast.success("Payment recorded successfully")
             setPaymentAmount("")
             setPaymentReference("")
-            setPaymentModeSelected("cash")
+            setPaymentModeSelected("upi")
             await fetchPaymentHistory(viewInvoice.id)
             fetchInvoices()
 
@@ -934,7 +1002,7 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
 
     const handleMarkAsPaid = (invoiceId) => {
         setPendingPaidInvoiceId(invoiceId)
-        setPaidPaymentMode("cash")
+        setPaidPaymentMode("upi")
         setPaidPaymentRef("")
         setIsPaidModeDialogOpen(true)
     }
@@ -1465,8 +1533,8 @@ const isNativePlatform = () => Capacitor.isNativePlatform()
         setUseAdvance(false)
         setLineItems([])
         setDiscount(0)
-        setPaymentStatus("")
-        setPaymentMode("cash")
+        setPaymentStatus("pending")
+        setPaymentMode("upi")
         setDraftId(null)
         setIsDraft(false)
         setAdditionalCharges([{ label: "", amount: "" }])
@@ -1657,9 +1725,9 @@ const total = getInvoiceDisplayTotal(invoice)
                       <td>${index + 1}</td>
                       <td>${formatProductName(item)}</td>
                       <td class="text-right">${item.quantity}</td>
-                      <td class="text-right">₹${formatCurrency(item.price)}</td>
+                      <td class="text-right">${formatDisplayCurrency(item.price)}</td>
                       <td class="text-right">${item.gst_rate}%</td>
-                      <td class="text-right">₹${formatCurrency(item.total)}</td>
+                      <td class="text-right">${formatDisplayCurrency(item.total)}</td>
                     </tr>
                   `,
             )
@@ -1671,13 +1739,13 @@ const total = getInvoiceDisplayTotal(invoice)
                 <table>
                   <tr>
                     <td>Subtotal:</td>
-                    <td class="text-right">₹${formatCurrency(subtotal)}</td>
+                    <td class="text-right">${formatDisplayCurrency(subtotal)}</td>
                   </tr>
                   <tr>
     ${gstAmount > 0 ? `
     <tr>
       <td>GST Amount:</td>
-      <td class="text-right">₹${formatCurrency(gstAmount)}</td>
+      <td class="text-right">${formatDisplayCurrency(gstAmount)}</td>
     </tr>
     ` : ""}
                   </tr>
@@ -1687,7 +1755,7 @@ const total = getInvoiceDisplayTotal(invoice)
       .map(c => `
         <tr>
           <td>${c.label || "Additional Charge"}:</td>
-          <td class="text-right">₹${formatCurrency(c.amount)}</td>
+          <td class="text-right">${formatDisplayCurrency(c.amount)}</td>
         </tr>
       `).join("")
   : ""
@@ -1695,20 +1763,20 @@ const total = getInvoiceDisplayTotal(invoice)
 
                   <tr>
                     <td>Discount:</td>
-                    <td class="text-right">-₹${formatCurrency(invoice.discount)}</td>
+                    <td class="text-right">-${formatDisplayCurrency(invoice.discount)}</td>
                   </tr>
                   <tr class="total-row">
                     <td>Total Amount:</td>
-                    <td class="text-right">₹${formatCurrency(total)}</td>
+                    <td class="text-right">${formatDisplayCurrency(total)}</td>
                   </tr>
                   ${invoice.payment_status === "partial" ? `
                   <tr>
                     <td>Paid Amount:</td>
-                    <td class="text-right">₹${formatCurrency(invoice.paid_amount || 0)}</td>
+                    <td class="text-right">${formatDisplayCurrency(invoice.paid_amount || 0)}</td>
                   </tr>
                   <tr style="background: #fff3cd;">
                     <td><strong>Remaining Balance:</strong></td>
-                    <td class="text-right" style="color: #c41e3a;"><strong>₹${formatCurrency(invoice.balance_amount || 0)}</strong></td>
+                    <td class="text-right" style="color: #c41e3a;"><strong>${formatDisplayCurrency(invoice.balance_amount || 0)}</strong></td>
                   </tr>
                   ` : ""}
                 </table>
@@ -1842,20 +1910,20 @@ const total = getInvoiceDisplayTotal(invoice)
         <td>${i + 1}</td>
         <td>${item.product_name}</td>
         <td>${item.quantity}</td>
-        <td>₹${formatCurrency(item.price)}</td>
-        <td>₹${formatCurrency(item.total)}</td>
+        <td>${formatDisplayCurrency(item.price)}</td>
+        <td>${formatDisplayCurrency(item.total)}</td>
       </tr>
     </table>
   `).join("")}
 
-  <p><strong>Subtotal:</strong> ₹${formatCurrency(subtotal)}</p>
-  <p><strong>GST:</strong> ₹${formatCurrency(gstAmount)}</p>
-  <p><strong>Discount:</strong> ₹${formatCurrency(invoice.discount)}</p>
-  <h3>Total: ₹${formatCurrency(total)}</h3>
+  <p><strong>Subtotal:</strong> ${formatDisplayCurrency(subtotal)}</p>
+  <p><strong>GST:</strong> ${formatDisplayCurrency(gstAmount)}</p>
+  <p><strong>Discount:</strong> ${formatDisplayCurrency(invoice.discount)}</p>
+  <h3>Total: ${formatDisplayCurrency(total)}</h3>
   ${invoice.payment_status === "partial" ? `
     <div style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-top: 10px;">
-      <p><strong>Paid Amount:</strong> ₹${formatCurrency(invoice.paid_amount || 0)}</p>
-      <p style="color: #c41e3a;"><strong>Remaining Balance:</strong> ₹${formatCurrency(invoice.balance_amount || 0)}</p>
+      <p><strong>Paid Amount:</strong> ${formatDisplayCurrency(invoice.paid_amount || 0)}</p>
+      <p style="color: #c41e3a;"><strong>Remaining Balance:</strong> ${formatDisplayCurrency(invoice.balance_amount || 0)}</p>
     </div>
   ` : ""}
 </div>
@@ -1952,7 +2020,7 @@ const total = getInvoiceDisplayTotal(invoice)
     const mobileStatsCards = [
         {
             label: "Today Sales",
-            value: `₹${formatCurrency(todayStats.total_sales_today)}`,
+            value: `${formatDisplayCurrency(todayStats.total_sales_today)}`,
             icon: Wallet,
         },
         {
@@ -1962,12 +2030,12 @@ const total = getInvoiceDisplayTotal(invoice)
         },
         {
             label: "Cash",
-            value: `₹${formatCurrency(todayStats.cash_sales_today)}`,
+            value: `${formatDisplayCurrency(todayStats.cash_sales_today)}`,
             icon: Landmark,
         },
         {
             label: "Online",
-            value: `₹${formatCurrency(todayStats.online_sales_today)}`,
+            value: `${formatDisplayCurrency(todayStats.online_sales_today)}`,
             icon: Share2,
         },
     ]
@@ -2006,8 +2074,8 @@ const total = getInvoiceDisplayTotal(invoice)
         )
 
         setDiscount(Number(draft.discount || 0))
-        setPaymentStatus(draft.payment_status || "pending")
-        setPaymentMode(draft.payment_mode || "cash")
+        setPaymentStatus(normalizePaymentStatus(draft.payment_status))
+        setPaymentMode(normalizePaymentMode(draft.payment_mode))
         setPaidAmount(Number(draft.paid_amount || 0))
 
         if (Array.isArray(draft.additional_charges) && draft.additional_charges.length > 0) {
@@ -2255,7 +2323,7 @@ const total = getInvoiceDisplayTotal(invoice)
       <div className="mt-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <p className="text-sm font-semibold text-emerald-300">Advance Available: Rs. {formatCurrency(advanceAvailable)}</p>
+                              <p className="text-sm font-semibold text-emerald-300">Advance Available: {formatDisplayCurrency(advanceAvailable)}</p>
             <p className="text-[11px] text-emerald-100/80">Use wallet balance on this invoice</p>
           </div>
           <label className="flex items-center gap-2 text-xs text-white">
@@ -2271,14 +2339,14 @@ const total = getInvoiceDisplayTotal(invoice)
         </div>
         {useAdvance && (
           <div className="flex justify-between text-xs text-emerald-100">
-            <span>Advance Used: Rs. {formatCurrency(appliedAdvance)}</span>
-            <span>Payable: Rs. {formatCurrency(payableTotal)}</span>
+                                <span>Advance Used: {formatDisplayCurrency(appliedAdvance)}</span>
+                                <span>Payable: {formatDisplayCurrency(payableTotal)}</span>
           </div>
         )}
-        {useAdvance && !isAdvanceCovered && paymentStatus === "partial" && remainingBalance > 0 && (
+        {useAdvance && !isAdvanceCovered && normalizedPaymentStatus === "partial" && remainingBalance > 0 && (
           <div className="flex justify-between text-xs text-yellow-200">
             <span>Balance Amount:</span>
-            <span>Rs. {formatCurrency(remainingBalance)}</span>
+                                <span>{formatDisplayCurrency(remainingBalance)}</span>
           </div>
         )}
       </div>
@@ -2463,7 +2531,7 @@ const total = getInvoiceDisplayTotal(invoice)
 
       {/* PRICE */}
       <span className="text-base font-bold whitespace-nowrap">
-        ₹{formatCurrency(item.total)}
+        {formatDisplayCurrency(item.total)}
       </span>
 
       {/* STEPPER */}
@@ -2535,7 +2603,7 @@ const total = getInvoiceDisplayTotal(invoice)
                                             >
                                                 <p className="text-sm font-semibold">{d.draft_number}</p>
                                                 <p className="text-xs text-muted-foreground">
-                                                    {d.customer_name} • ₹{formatCurrency(d.total || 0)}
+                                                    {d.customer_name} • {formatDisplayCurrency(d.total || 0)}
                                                 </p>
                                             </button>
                                             <div className="flex gap-1">
@@ -2677,15 +2745,15 @@ const total = getInvoiceDisplayTotal(invoice)
                                                         </div>
                                                     </div>
                                                     <div className="text-right shrink-0">
-                                                        <p className="text-base font-bold">₹{formatCurrency(getInvoiceDisplayTotal(inv))}</p>
+                                                        <p className="text-base font-bold">{formatDisplayCurrency(getInvoiceDisplayTotal(inv))}</p>
                                                         {Number(inv.advance_used || 0) > 0 && (
                                                             <p className="mt-1 text-[10px] font-medium text-emerald-600">
-                                                                Advance Used: ₹{formatCurrency(inv.advance_used)}
+                                                                Advance Used: {formatDisplayCurrency(inv.advance_used)}
                                                             </p>
                                                         )}
                                                         {inv.payment_status === "partial" && Number(inv.balance_amount || 0) > 0 && (
                                                             <p className="mt-1 text-[10px] font-medium text-red-600">
-                                                                Balance: ₹{formatCurrency(inv.balance_amount)}
+                                                                Balance: {formatDisplayCurrency(inv.balance_amount)}
                                                             </p>
                                                         )}
                                                         <span className={`inline-flex mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${inv.payment_status === "paid" ? "bg-green-100 text-green-800" :
@@ -2817,10 +2885,10 @@ const total = getInvoiceDisplayTotal(invoice)
                                             <div className="flex items-center justify-between mb-1">
                                                 <span className="text-xs font-semibold">{inv.invoice_number}</span>
                                                 <div className="text-right">
-                                                    <span className="text-sm font-bold">₹{formatCurrency(getInvoiceDisplayTotal(inv))}</span>
+                                                    <span className="text-sm font-bold">{formatDisplayCurrency(getInvoiceDisplayTotal(inv))}</span>
                                                     {Number(inv.advance_used || 0) > 0 && (
                                                         <p className="text-[10px] font-medium text-emerald-600">
-                                                            Advance Used: ₹{formatCurrency(inv.advance_used)}
+                                                            Advance Used: {formatDisplayCurrency(inv.advance_used)}
                                                         </p>
                                                     )}
                                                 </div>
@@ -2923,10 +2991,10 @@ const total = getInvoiceDisplayTotal(invoice)
       <div className="flex items-center justify-between">
         <div className="flex gap-5 text-sm">
           <span className="text-muted-foreground">
-            Subtotal: <strong className="text-base">₹{formatCurrency(subtotal)}</strong>
+            Subtotal: <strong className="text-base">{formatDisplayCurrency(subtotal)}</strong>
           </span>
           <span className="text-muted-foreground">
-            GST: <strong className="text-base">₹{formatCurrency(gstAmount)}</strong>
+            GST: <strong className="text-base">{formatDisplayCurrency(gstAmount)}</strong>
           </span>
         </div>
 
@@ -2957,7 +3025,7 @@ const total = getInvoiceDisplayTotal(invoice)
           onClick={() => setShowPaymentDrawer(true)}
           className="flex-1 h-11 text-sm font-semibold"
         >
-          Proceed →
+          Proceed ->
         </Button>
       </div>
     </div>
@@ -2995,29 +3063,29 @@ const total = getInvoiceDisplayTotal(invoice)
         <div className="grid grid-cols-2 gap-2">
           <div>
             <Label className="text-xs">Status*</Label>
-            <Select value={paymentStatus} onValueChange={setPaymentStatus}>
+            <Select value={normalizedPaymentStatus} onValueChange={(value) => setPaymentStatus(normalizePaymentStatus(value))}>
               <SelectTrigger className="h-9">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="pending">? Pending</SelectItem>
-                <SelectItem value="paid">? Paid</SelectItem>
-                <SelectItem value="partial">? Partial</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="paid">Paid</SelectItem>
+                <SelectItem value="partial">Partial</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div>
             <Label className="text-xs">Mode*</Label>
-            <Select value={paymentMode} onValueChange={setPaymentMode}>
+            <Select value={normalizedPaymentMode} onValueChange={(value) => setPaymentMode(normalizePaymentMode(value))}>
               <SelectTrigger className="h-9">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="cash">?? Cash</SelectItem>
-                <SelectItem value="upi">?? UPI</SelectItem>
-                <SelectItem value="bank">?? Bank</SelectItem>
-                <SelectItem value="card">?? Card</SelectItem>
+                <SelectItem value="cash">Cash</SelectItem>
+                <SelectItem value="upi">UPI</SelectItem>
+                <SelectItem value="bank">Bank</SelectItem>
+                <SelectItem value="cheque">Cheque</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -3064,7 +3132,7 @@ const total = getInvoiceDisplayTotal(invoice)
       </div>
 
       {/* PARTIAL */}
-      {!isAdvanceCovered && paymentStatus === "partial" && (
+      {!isAdvanceCovered && normalizedPaymentStatus === "partial" && (
         <div>
           <Label className="text-xs">Paid</Label>
           <Input
@@ -3102,7 +3170,7 @@ const total = getInvoiceDisplayTotal(invoice)
             />
             <Input
               type="number"
-              placeholder="₹"
+              placeholder={RUPEE_SYMBOL}
               value={c.amount}
               onChange={(e) =>
                 updateAdditionalCharge(i, "amount", e.target.value)
@@ -3126,51 +3194,51 @@ const total = getInvoiceDisplayTotal(invoice)
 
       <div className="flex justify-between">
         <span>Subtotal</span>
-        <span>₹{formatCurrency(subtotal)}</span>
+        <span>{formatDisplayCurrency(subtotal)}</span>
       </div>
 
       {additionalTotal > 0 && (
         <div className="flex justify-between">
           <span>Extra</span>
-          <span>₹{formatCurrency(additionalTotal)}</span>
+          <span>{formatDisplayCurrency(additionalTotal)}</span>
         </div>
       )}
 
       {gstEnabled && (
         <div className="flex justify-between">
           <span>GST</span>
-          <span>₹{formatCurrency(gstAmount)}</span>
+          <span>{formatDisplayCurrency(gstAmount)}</span>
         </div>
       )}
 
       {discount > 0 && (
         <div className="flex justify-between text-red-500">
           <span>Discount</span>
-          <span>-₹{formatCurrency(discount)}</span>
+          <span>-{formatDisplayCurrency(discount)}</span>
         </div>
       )}
 
       <div className="flex justify-between font-bold text-base border-t pt-1">
         <span>Total</span>
-        <span>₹{formatCurrency(total)}</span>
+        <span>{formatDisplayCurrency(total)}</span>
       </div>
 
       {appliedAdvance > 0 && (
         <div className="flex justify-between text-emerald-600 text-xs">
           <span>Advance Used</span>
-          <span>-₹{formatCurrency(appliedAdvance)}</span>
+          <span>-{formatDisplayCurrency(appliedAdvance)}</span>
         </div>
       )}
 
       <div className="flex justify-between font-semibold text-sm">
         <span>Payable</span>
-        <span>₹{formatCurrency(payableTotal)}</span>
+        <span>{formatDisplayCurrency(payableTotal)}</span>
       </div>
 
-      {!isAdvanceCovered && paymentStatus === "partial" && (
+      {!isAdvanceCovered && normalizedPaymentStatus === "partial" && (
         <div className="flex justify-between text-yellow-600 text-xs">
           <span>Balance Amount</span>
-          <span>₹{formatCurrency(remainingBalance)}</span>
+          <span>{formatDisplayCurrency(remainingBalance)}</span>
         </div>
       )}
     </div>
@@ -3206,7 +3274,7 @@ const total = getInvoiceDisplayTotal(invoice)
                         <p className="text-sm text-muted-foreground">Invoice Number</p>
                         <p className="text-2xl font-bold">{createdInvoice?.invoice_number}</p>
                         <p className="text-sm text-muted-foreground">Total Amount</p>
-                        <p className="text-3xl font-bold text-primary">₹{formatCurrency(createdInvoice?.total || 0)}</p>
+                        <p className="text-3xl font-bold text-primary">{formatDisplayCurrency(createdInvoice?.total || 0)}</p>
                     </div>
 
                     <DialogFooter className="flex flex-col sm:flex-row gap-2">
@@ -3302,8 +3370,8 @@ const total = getInvoiceDisplayTotal(invoice)
                                                         </div>
                                                     </td>
                                                     <td className="text-center p-2">{item.quantity}</td>
-                                                    <td className="text-right p-2">₹{formatCurrency(item.price)}</td>
-                                                    <td className="text-right p-2 font-medium">₹{formatCurrency(item.total)}</td>
+                                                    <td className="text-right p-2">{formatDisplayCurrency(item.price)}</td>
+                                                    <td className="text-right p-2 font-medium">{formatDisplayCurrency(item.total)}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -3315,7 +3383,7 @@ const total = getInvoiceDisplayTotal(invoice)
                             <div className="border-t pt-4 space-y-2 text-sm">
                                 <div className="flex justify-between">
                                     <span>Subtotal:</span>
-                                    <span className="font-medium">₹{formatCurrency(viewInvoice.subtotal)}</span>
+                                    <span className="font-medium">{formatDisplayCurrency(viewInvoice.subtotal)}</span>
                                 </div>
 
                                 {Array.isArray(viewInvoice.additional_charges) &&
@@ -3324,26 +3392,26 @@ const total = getInvoiceDisplayTotal(invoice)
                                         .map((c, i) => (
                                             <div key={i} className="flex justify-between">
                                                 <span>{c.label || "Additional Charge"}:</span>
-                                                <span className="font-medium">₹{formatCurrency(c.amount)}</span>
+                                                <span className="font-medium">{formatDisplayCurrency(c.amount)}</span>
                                             </div>
                                         ))}
 
                                 <div className="flex justify-between">
                                     <span>GST:</span>
-                                    <span className="font-medium">₹{formatCurrency(viewInvoice.gst_amount)}</span>
+                                    <span className="font-medium">{formatDisplayCurrency(viewInvoice.gst_amount)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Discount:</span>
-                                    <span className="font-medium">-₹{formatCurrency(viewInvoice.discount)}</span>
+                                    <span className="font-medium">-{formatDisplayCurrency(viewInvoice.discount)}</span>
                                 </div>
                                 <div className="flex justify-between text-lg font-bold border-t pt-2">
                                     <span>Total:</span>
-                                    <span>₹{formatCurrency(getInvoiceDisplayTotal(viewInvoice))}</span>
+                                    <span>{formatDisplayCurrency(getInvoiceDisplayTotal(viewInvoice))}</span>
                                 </div>
                                 {Number(viewInvoice.advance_used || 0) > 0 && (
                                     <div className="flex justify-between text-emerald-600">
                                         <span>Advance Used:</span>
-                                        <span className="font-medium">₹{formatCurrency(viewInvoice.advance_used || 0)}</span>
+                                        <span className="font-medium">{formatDisplayCurrency(viewInvoice.advance_used || 0)}</span>
                                     </div>
                                 )}
 
@@ -3357,11 +3425,11 @@ const total = getInvoiceDisplayTotal(invoice)
                                     <>
                                         <div className="flex justify-between text-green-600">
                                             <span>Paid Amount:</span>
-                                            <span className="font-medium">₹{formatCurrency(viewInvoice.paid_amount || 0)}</span>
+                                            <span className="font-medium">{formatDisplayCurrency(viewInvoice.paid_amount || 0)}</span>
                                         </div>
                                         <div className="flex justify-between text-red-600">
                                             <span>Balance Remaining:</span>
-                                            <span className="font-medium">₹{formatCurrency(viewInvoice.balance_amount || 0)}</span>
+                                            <span className="font-medium">{formatDisplayCurrency(viewInvoice.balance_amount || 0)}</span>
                                         </div>
                                     </>
                                 )}
@@ -3403,7 +3471,7 @@ const total = getInvoiceDisplayTotal(invoice)
                                 >
                                     <p className="font-medium">{combo.name}</p>
                                     <p className="text-xs text-muted-foreground">
-                                        ₹{formatCurrency(combo.price)} • {combo.items?.length || 0} items
+                                        {formatDisplayCurrency(combo.price)} • {combo.items?.length || 0} items
                                     </p>
                                 </button>
                             ))
@@ -3606,20 +3674,20 @@ const total = getInvoiceDisplayTotal(invoice)
                         <div className="bg-muted p-3 rounded-lg space-y-1 text-sm">
                             <div className="flex justify-between">
                                 <span>Total:</span>
-                                <span className="font-semibold">₹{formatCurrency(viewInvoice?.total || 0)}</span>
+                                <span className="font-semibold">{formatDisplayCurrency(viewInvoice?.total || 0)}</span>
                             </div>
                             <div className="flex justify-between text-green-600">
                                 <span>Paid:</span>
-                                <span className="font-semibold">₹{formatCurrency(viewInvoice?.paid_amount || 0)}</span>
+                                <span className="font-semibold">{formatDisplayCurrency(viewInvoice?.paid_amount || 0)}</span>
                             </div>
                             <div className="flex justify-between text-red-600">
                                 <span>Balance:</span>
-                                <span className="font-semibold">₹{formatCurrency(viewInvoice?.balance_amount || 0)}</span>
+                                <span className="font-semibold">{formatDisplayCurrency(viewInvoice?.balance_amount || 0)}</span>
                             </div>
                         </div>
 
                         <div>
-                            <Label>Payment Amount (₹)*</Label>
+                            <Label>Payment Amount ({RUPEE_SYMBOL})*</Label>
                             <Input
                                 type="number"
                                 value={paymentAmount}
@@ -3685,7 +3753,7 @@ const total = getInvoiceDisplayTotal(invoice)
                                         <div key={payment.id} className="flex items-center justify-between p-2 bg-muted rounded text-sm">
                                             <div>
                                                 <p className="font-medium">
-                                                    ₹{formatCurrency(payment.amount)} via {payment.payment_mode.toUpperCase()}
+                                                    {formatDisplayCurrency(payment.amount)} via {payment.payment_mode.toUpperCase()}
                                                 </p>
                                                 <p className="text-xs text-muted-foreground">
                                                     {new Date(payment.created_at).toLocaleDateString('en-IN', {
